@@ -26,14 +26,16 @@
       perSystem =
         { pkgs, system, ... }:
         let
-          rust-toolchain = (pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml).override {
-            extensions = [
-              "rust-src"
-              "rustc-dev"
-              "llvm-tools-preview"
-              "rust-analyzer"
-            ];
-          };
+          rust-toolchain =
+            (pkgs.rust-bin.fromRustupToolchainFile ../rust-toolchain.toml).override
+              (oldAttrs: {
+                extensions = (oldAttrs.extensions or [ ]) ++ [
+                  "rust-src"
+                  "rustc-dev"
+                  "llvm-tools-preview"
+                  "rust-analyzer"
+                ];
+              });
 
           verusfmt =
             let
