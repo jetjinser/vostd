@@ -13,6 +13,7 @@ pub mod mm;
 #[allow(unused_parens)]
 #[allow(unused_braces)]
 mod sync;
+pub use sync::mutex_protocol;
 #[allow(unused_parens)]
 #[allow(unused_braces)]
 pub mod task;
