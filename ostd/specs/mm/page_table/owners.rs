@@ -370,6 +370,192 @@ pub open spec fn allocated_empty_node_grandchildren_none<C: PageTableConfig>(
         0 <= i < NR_ENTRIES && 0 <= j < NR_ENTRIES ==> !#[trigger] owner.child(i).has_child(j)
 }
 
+/// The children of `owner` in `[start, end)` are borrowed kernel-half edges
+/// with no ghost subtree of their own (see `mark_borrowed_children_at`).
+pub open spec fn marked_borrowed_slots<C: PageTableConfig>(
+    owner: OwnerSubtree<C>,
+    start: usize,
+    end: usize,
+) -> bool {
+    forall|j: int|
+        start <= j < end ==> #[trigger] owner.child(j).value().is_borrowed()
+            && !owner.child(j).has_child(0)
+}
+
+/// Pointwise projection of [`marked_borrowed_slots`]: avoids relying on
+/// quantifier instantiation in large verification contexts.
+pub proof fn lemma_marked_borrowed_slots_index<C: PageTableConfig>(
+    owner: OwnerSubtree<C>,
+    start: usize,
+    end: usize,
+    j: int,
+)
+    requires
+        start <= j < end,
+        marked_borrowed_slots(owner, start, end),
+    ensures
+        owner.child(j).value().is_borrowed(),
+        !owner.child(j).has_child(0),
+{
+}
+
+/// Trigger-friendly bridges over `allocated_empty_node_owner`'s per-child
+/// clauses: the built-in `owner.has_child(i)` trigger deadlocks against use
+/// sites that mention `owner.children()[k]` instead.
+pub proof fn lemma_allocated_child_facts_all<C: PageTableConfig>(
+    owner: OwnerSubtree<C>,
+    level: PagingLevel,
+)
+    requires
+        allocated_empty_node_owner(owner, level),
+    ensures
+        forall|k: int| #![trigger owner.children()[k]]
+            0 <= k < NR_ENTRIES ==> owner.children()[k] is Some,
+        forall|k: int| #![trigger owner.children()[k]]
+            0 <= k < NR_ENTRIES ==> owner.child(k).value().is_absent(),
+        forall|k: int| #![trigger owner.children()[k]]
+            0 <= k < NR_ENTRIES ==> owner.child(k).value().path
+                == owner.value().path.push_tail(k),
+        forall|k: int| #![trigger owner.children()[k]]
+            0 <= k < NR_ENTRIES ==> owner.child(k).level() == (INC_LEVELS - level) as nat,
+{
+    reveal_with_fuel(vstd_extra::ghost_tree::TreeNode::inv, 2);
+    assert(owner.inv());
+    assert(owner.value().node().inv());
+    assert(1 <= level <= NR_LEVELS);
+    assert forall|k: int| #![trigger owner.children()[k]]
+        0 <= k < NR_ENTRIES
+        implies
+            owner.children()[k] is Some
+                && owner.child(k).value().is_absent()
+                && owner.child(k).value().path == owner.value().path.push_tail(k)
+                && owner.child(k).level() == owner.level() + 1
+        by {
+        assert(owner.has_child(k));
+    }
+}
+
+/// Trigger-friendly bridge over `allocated_empty_node_grandchildren_none`.
+pub proof fn lemma_allocated_no_grandchildren_all<C: PageTableConfig>(
+    owner: OwnerSubtree<C>,
+)
+    requires
+        allocated_empty_node_grandchildren_none(owner),
+    ensures
+        forall|k: int, l: int| #![trigger owner.child(k).has_child(l)]
+            0 <= k < NR_ENTRIES && 0 <= l < NR_ENTRIES ==> !owner.child(k).has_child(l),
+{
+    assert forall|k: int, l: int| 0 <= k < NR_ENTRIES && 0 <= l < NR_ENTRIES
+        implies !owner.child(k).has_child(l) by {
+        assert(!owner.child(k).has_child(l));
+    }
+}
+
+/// Marks the children in `[start, end)` as borrowed edges to the kernel
+/// subtree (user PT creation shares the kernel top-level entries). Same
+/// recursion as `rebase_freshly_allocated_children_at`, but flips each
+/// child's `kind` to `Borrowed(Set::empty())` instead of rebasing paths.
+///
+/// Children outside `[start, end)` are left untouched, and children in
+/// `[start, i)` must already be marked (the tail-recursion invariant). The
+/// `allocated_empty_node_grandchildren_none` precondition supplies the
+/// `!c.has_child(0)` clause: a borrowed edge carries no ghost subtree of
+/// its own.
+pub proof fn mark_borrowed_children_at<C: PageTableConfig>(
+    tracked owner: &mut OwnerSubtree<C>,
+    start: usize,
+    end: usize,
+    i: usize,
+)
+    requires
+        start <= i <= end,
+        end <= NR_ENTRIES,
+        old(owner).children().len() == NR_ENTRIES,
+        forall|j: int|
+            0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
+        allocated_empty_node_grandchildren_none(*old(owner)),
+            marked_borrowed_slots(*old(owner), start, i),
+    ensures
+        final(owner).value() == old(owner).value(),
+        final(owner).level() == old(owner).level(),
+        final(owner).children().len() == NR_ENTRIES,
+        forall|j: int|
+            0 <= j < i || end <= j < NR_ENTRIES
+                ==> (#[trigger] final(owner).children()[j]) == old(owner).children()[j],
+            marked_borrowed_slots(*final(owner), start, end),
+    decreases end - i,
+{
+    broadcast use vstd::seq::group_seq_lemmas;
+
+    if i < end {
+        let tracked child_node = owner.tracked_borrow_mut_child(i as int);
+        let tracked mut child_value = child_node.tracked_borrow_mut_value();
+        child_value.kind = EntryOwnerKind::Borrowed(Set::empty());
+        // The kind flip only rewrites the child's `value`; the ghost
+        // children sequences of `owner` and of the child are preserved,
+        // so the callee's all-`Some` / grandchildren-`None` requirements
+        // still hold.
+        assert(owner.children() == old(owner).children().update(
+            i as int,
+            Some(*final(child_node)),
+        ));
+        assert(final(child_node).children() == old(owner).child(i as int).children());
+        assert forall|a: int, b: int|
+            0 <= a < NR_ENTRIES && 0 <= b < NR_ENTRIES
+            implies !#[trigger] owner.child(a).has_child(b) by {
+            if a == i as int {
+                assert(owner.child(a) == *final(child_node));
+                assert(!old(owner).child(a).has_child(b));
+            } else {
+                assert(owner.child(a) == old(owner).child(a));
+                assert(!old(owner).child(a).has_child(b));
+            }
+        }
+        assert forall|j: int|
+            (start <= j && j < (i + 1) as int) implies
+            ((owner.children()[j])->0).value().is_borrowed()
+                && !((owner.children()[j])->0).has_child(0) by {
+            let c = (owner.children()[j])->0;
+            if j == i as int {
+                assert(c == owner.child(j));
+                assert(c.value().kind == final(child_value).kind);
+                assert(!owner.child(j).has_child(0));
+            } else {
+                assert(start <= j && j < i);
+                assert(c == old(owner).child(j));
+                lemma_marked_borrowed_slots_index(*old(owner), start, i, j);
+                assert(c.value().is_borrowed());
+            }
+        }
+        mark_borrowed_children_at(owner, start, end, (i + 1) as usize);
+    }
+}
+/// Marks `owner.children[start..end]` as borrowed kernel-half edges in one
+/// call; see `mark_borrowed_children_at` for the contract details.
+pub proof fn mark_borrowed_children<C: PageTableConfig>(
+    tracked owner: &mut OwnerSubtree<C>,
+    start: usize,
+    end: usize,
+)
+    requires
+        start <= end,
+        end <= NR_ENTRIES,
+        old(owner).children().len() == NR_ENTRIES,
+        forall|j: int|
+            0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
+        allocated_empty_node_grandchildren_none(*old(owner)),
+    ensures
+        final(owner).value() == old(owner).value(),
+        final(owner).level() == old(owner).level(),
+        final(owner).children().len() == NR_ENTRIES,
+        forall|j: int|
+            0 <= j < start || end <= j < NR_ENTRIES
+                ==> (#[trigger] final(owner).children()[j]) == old(owner).children()[j],
+            marked_borrowed_slots(*final(owner), start, end),
+{
+    mark_borrowed_children_at(owner, start, end, start);
+}
+
 /// Recursive worker for `rebase_freshly_allocated_children`. Rebases
 /// `owner.children[i..NR_ENTRIES]` and leaves `owner.children[0..i]`
 /// untouched. Verus disallows `while` in proof code, so the loop is
