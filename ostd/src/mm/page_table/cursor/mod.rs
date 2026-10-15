@@ -1826,6 +1826,20 @@ impl<'rcu, C: PageTableConfig, A: InAtomicMode> Cursor<'rcu, C, A> {
         let ghost owner0 = *owner;
         proof {
             self.lemma_pte_index_matches_owner(owner0);
+            // `inv_children_rel` admits a `borrowed` disjunct only for
+            // top-level children OUTSIDE the config's managed range. The
+            // child at `cont.idx` is in-range whenever the continuation is
+            // the top-level one, so the strict `match_pte` branch holds here.
+            let cont = owner0.continuations[owner0.level - 1];
+            assert(cont.level() == owner0.level);
+            if owner0.level == NR_LEVELS {
+                // `wf` + `path[level - 1] is Some` pin guard_level to the top.
+                assert(owner0.guard_level == NR_LEVELS);
+                owner0.lemma_in_locked_range_guard_index_eq_prefix();
+                assert(cont.idx == pte_index_spec::<C>(owner0.prefix, NR_LEVELS as PagingLevel));
+                assert(C::TOP_LEVEL_INDEX_RANGE().start <= cont.idx
+                    < C::TOP_LEVEL_INDEX_RANGE().end);
+            }
         }
 
         let node = path_slot_as_mut(&mut self.path, self.level as usize - 1);
@@ -3560,6 +3574,19 @@ impl<'rcu, C: PageTableConfig, A: InAtomicMode> CursorMut<'rcu, C, A> {
         proof {
             owner0.lemma_inv_continuation(owner0.level - 1);
             self.0.lemma_pte_index_matches_owner(owner0);
+            // `inv_children_rel` admits a `borrowed` disjunct only for
+            // top-level children OUTSIDE the config's managed range. The
+            // child at `cont.idx` is in-range whenever the continuation is
+            // the top-level one, so the strict `match_pte` branch holds here.
+            reveal(<CursorOwner as Inv>::inv);
+            let cont = owner0.continuations[owner0.level - 1];
+            assert(cont.level() == owner0.level);
+            if owner0.level == NR_LEVELS {
+                owner0.lemma_in_locked_range_top_index_lt_top_end();
+                assert(cont.idx == pte_index_spec::<C>(owner0.va, NR_LEVELS as PagingLevel));
+                assert(C::TOP_LEVEL_INDEX_RANGE().start <= cont.idx
+                    < C::TOP_LEVEL_INDEX_RANGE().end);
+            }
         }
         let entry_idx = pte_index::<C>(self.0.va, self.0.level);
         proof {

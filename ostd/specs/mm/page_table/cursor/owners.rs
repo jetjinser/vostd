@@ -313,10 +313,17 @@ impl<'rcu, C: PageTableConfig> CursorContinuation<'rcu, C> {
                     &&& child->0.value().parent_level == self.level()
                     &&& child->0.level() == self.tree_level + 1
                     &&& child->0.value().path.len() == self.entry_own.node().tree_level + 1
-                    &&& child->0.value().match_pte(
+                    &&& (child->0.value().match_pte(
                         self.entry_own.node().children_perm.value()[i],
                         self.entry_own.node().level(),
-                    )
+                    ) || (self.entry_own.node().level() == NR_LEVELS
+                        && C::LEADING_BITS_spec() == 0
+                        && !(C::TOP_LEVEL_INDEX_RANGE().start <= i
+                            < C::TOP_LEVEL_INDEX_RANGE().end)
+                        && child->0.value().borrowed_match_pte(
+                        self.entry_own.node().children_perm.value()[i],
+                        self.entry_own.node().level(),
+                    )))
                     &&& child->0.value().path == self.path().push_tail(i)
                 }
             }
@@ -356,7 +363,14 @@ impl<'rcu, C: PageTableConfig> CursorContinuation<'rcu, C> {
             self.children[i]->0.value().match_pte(
                 self.entry_own.node().children_perm.value()[i],
                 self.entry_own.node().level(),
-            ),
+            ) || (self.entry_own.node().level() == NR_LEVELS
+                && C::LEADING_BITS_spec() == 0
+                && !(C::TOP_LEVEL_INDEX_RANGE().start <= i
+                    < C::TOP_LEVEL_INDEX_RANGE().end)
+                && self.children[i]->0.value().borrowed_match_pte(
+                self.entry_own.node().children_perm.value()[i],
+                self.entry_own.node().level(),
+            )),
             self.children[i]->0.value().path == self.path().push_tail(i),
     {
     }

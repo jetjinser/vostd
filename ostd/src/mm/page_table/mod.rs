@@ -1059,6 +1059,17 @@ impl PageTable<KernelPtConfig> {
                 new_node_owner.inv(),
                 new_node_owner.relate_guard(new_node),
                 regions.contains(new_node_owner.slot_index),
+                // Ghost-tree facts of the fresh user PT's root. The loop body
+                // never touches `new_pt_owner_val`, so these are preserved
+                // verbatim; they feed `mark_borrowed_children` after the loop.
+                new_pt_owner_val.0.children().len() == NR_ENTRIES,
+                forall|j: int|
+                    #![trigger new_pt_owner_val.0.children()[j]]
+                    0 <= j < NR_ENTRIES ==> new_pt_owner_val.0.children()[j] is Some,
+                forall|i: int, j: int|
+                    #![trigger new_pt_owner_val.0.children()[i]->0.children()[j]]
+                    0 <= i < NR_ENTRIES && 0 <= j < NR_ENTRIES
+                        ==> !new_pt_owner_val.0.child(i).has_child(j),
             decreases KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end - i,
         {
             proof {
@@ -1160,6 +1171,23 @@ impl PageTable<KernelPtConfig> {
             i = i + 1;
         }
 
+        proof {
+            // Representation landing: record the shared kernel-half top-level
+            // entries as `Borrowed` edges (translation-only, ghost-owned by
+            // the kernel PT) in the fresh user PT's ownership tree.
+            assert(KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start
+                <= KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end);
+            assert(KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end <= NR_ENTRIES);
+            assert(crate::specs::mm::page_table::allocated_empty_node_grandchildren_none(
+                new_pt_owner_val.0,
+            ));
+            crate::specs::mm::page_table::mark_borrowed_children(
+                &mut new_pt_owner_val.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            );
+        }
+
         PageTable::<UserPtConfig> { root: new_root }
     }/*
     /// Protect the given virtual address range in the kernel page table.
@@ -1231,6 +1259,18 @@ impl<C: PageTableConfig> PageTable<C> {
             (final(owner)@->0).0.value().metaregion_sound(*final(regions)),
             r.relates_owner(final(owner)@->0, *final(regions)),
             final(regions).inv(),
+            // The fresh node's ghost tree is the freshly-allocated empty
+            // shape: every child slot is `Some` (holding an `absent` entry)
+            // with no ghost grandchildren. `create_user_page_table` needs
+            // these to land the shared kernel-half `Borrowed` marking via
+            // `mark_borrowed_children` on the fresh owner.
+            forall|j: int|
+                #![trigger (final(owner)@->0).0.children()[j]]
+                0 <= j < NR_ENTRIES ==> (final(owner)@->0).0.children()[j] is Some,
+            forall|i: int, j: int|
+                #![trigger (final(owner)@->0).0.children()[i]->0.children()[j]]
+                0 <= i < NR_ENTRIES && 0 <= j < NR_ENTRIES
+                    ==> !((final(owner)@->0).0.children()[i]->0).has_child(j),
             final(guards).unlocked((final(owner)@->0).0.value().node().slot_vaddr()),
             // Allocating a fresh node does not change the lock set, so any node
             // that was (un)locked before remains so.
