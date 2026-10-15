@@ -163,6 +163,138 @@ pub proof fn lemma_count_present_upto_unchanged<E: PageTableEntryTrait>(
     }
 }
 
+/// `count_present_upto` is monotone in `n`.
+pub proof fn lemma_count_present_upto_monotone<E: PageTableEntryTrait>(
+    s: Seq<E>,
+    n1: int,
+    n2: int,
+)
+    requires
+        0 <= n1 <= n2,
+    ensures
+        count_present_upto(s, n1) <= count_present_upto(s, n2),
+    decreases n2,
+{
+    if n1 < n2 {
+        lemma_count_present_upto_monotone(s, n1, n2 - 1);
+    }
+}
+
+/// A present slot inside `[start, end)` makes the window count positive.
+pub proof fn lemma_count_present_window_present<E: PageTableEntryTrait>(
+    s: Seq<E>,
+    start: int,
+    end: int,
+    idx: int,
+)
+    requires
+        0 <= start <= idx < end,
+        s[idx].is_present(),
+    ensures
+        count_present_upto(s, end) - count_present_upto(s, start) >= 1,
+    decreases end,
+{
+    if idx == end - 1 {
+        lemma_count_present_upto_monotone(s, start, end - 1);
+        assert(count_present_upto(s, end) == count_present_upto(s, end - 1) + 1);
+    } else {
+        lemma_count_present_window_present(s, start, end - 1, idx);
+        lemma_count_present_upto_monotone(s, end - 1, end);
+    }
+}
+
+/// Bridging lemma for the exec `count_consistent` restore sites: the node's
+/// PTE array is updated at `idx` and `nr_children` is adjusted by the
+/// present-indicator delta of that slot. Below the top level the count is
+/// global; at the top level it covers only the config window, which requires
+/// `idx` to be in-window unless the slot's present-status is unchanged (the
+/// shared out-of-window slots — e.g. a user PT's kernel half — are otherwise
+/// never swapped through the verified paths).
+pub proof fn lemma_count_consistent_after_update<C: PageTableConfig>(
+    level: PagingLevel,
+    nr_children_old: int,
+    nr_children_new: int,
+    s: Seq<C::E>,
+    idx: int,
+    new_pte: C::E,
+)
+    requires
+        s.len() == NR_ENTRIES,
+        0 <= idx < NR_ENTRIES,
+        level < NR_LEVELS
+            || C::TOP_LEVEL_INDEX_RANGE().start <= idx
+                < C::TOP_LEVEL_INDEX_RANGE().end
+            || new_pte.is_present() == s[idx].is_present(),
+        nr_children_new - nr_children_old
+            == (if new_pte.is_present() {
+                1int
+            } else {
+                0int
+            }) - (if s[idx].is_present() {
+                1int
+            } else {
+                0int
+            }),
+        level < NR_LEVELS ==> nr_children_old == count_present(s),
+        level == NR_LEVELS ==> nr_children_old
+            == count_present_upto(s, C::TOP_LEVEL_INDEX_RANGE().end as int)
+                - count_present_upto(s, C::TOP_LEVEL_INDEX_RANGE().start as int),
+    ensures
+        level < NR_LEVELS ==> nr_children_new
+            == count_present(s.update(idx, new_pte)),
+        level == NR_LEVELS ==> nr_children_new
+            == count_present_upto(s.update(idx, new_pte), C::TOP_LEVEL_INDEX_RANGE().end as int)
+                - count_present_upto(s.update(idx, new_pte), C::TOP_LEVEL_INDEX_RANGE().start as int),
+{
+    let s2 = s.update(idx, new_pte);
+    let delta = (if new_pte.is_present() {
+        1int
+    } else {
+        0int
+    }) - (if s[idx].is_present() {
+        1int
+    } else {
+        0int
+    });
+    if level < NR_LEVELS {
+        lemma_count_present_upto_update(s, NR_ENTRIES as int, idx, new_pte);
+        assert(count_present(s2) == count_present(s) + delta);
+    } else {
+        C::lemma_page_table_config_constant_properties();
+        let start = C::TOP_LEVEL_INDEX_RANGE().start as int;
+        let end = C::TOP_LEVEL_INDEX_RANGE().end as int;
+        assert(end <= NR_ENTRIES);
+        assert(s.len() == NR_ENTRIES);
+        assert(start < end);
+        if start <= idx && idx < end {
+            // In-window update: the end-prefix count shifts by `delta`; the
+            // start-prefix (which excludes `idx`) is untouched.
+            lemma_count_present_upto_update(s, end, idx, new_pte);
+            lemma_count_present_upto_unchanged(s, s2, start);
+            assert(count_present_upto(s2, start) == count_present_upto(s, start));
+            assert(count_present_upto(s2, end) == count_present_upto(s, end) + delta);
+        } else {
+            // Out-of-window `idx`: the premise forces `delta == 0`, and the
+            // prefix counts are either both shifted by that same (zero)
+            // amount (`idx < start`) or both untouched (`idx >= end`).
+            assert(new_pte.is_present() == s[idx].is_present());
+            assert(delta == 0);
+            if idx < start {
+                assert(idx < end);
+                lemma_count_present_upto_update(s, start, idx, new_pte);
+                lemma_count_present_upto_update(s, end, idx, new_pte);
+                assert(count_present_upto(s2, start) == count_present_upto(s, start) + delta);
+                assert(count_present_upto(s2, end) == count_present_upto(s, end) + delta);
+            } else {
+                lemma_count_present_upto_unchanged(s, s2, end);
+                lemma_count_present_upto_unchanged(s, s2, start);
+                assert(count_present_upto(s2, start) == count_present_upto(s, start));
+                assert(count_present_upto(s2, end) == count_present_upto(s, end));
+            }
+        }
+    }
+}
+
 pub tracked struct PageMetaOwner {
     pub nr_children: pcell_maybe_uninit::PointsTo<u16>,
     pub stray: pcell_maybe_uninit::PointsTo<bool>,
@@ -289,10 +421,26 @@ impl<C: PageTableConfig> NodeOwner<C> {
         &&& self.count_consistent()
     }
 
-    /// `nr_children` equals the number of present PTEs in `children_perm`.
+    /// `nr_children` equals the number of present PTEs in `children_perm` —
+    /// over the node's managed slice of the array. Below the top level the
+    /// whole array is managed, so the count is global; a top-level node only
+    /// manages its config's `TOP_LEVEL_INDEX_RANGE` window: the remaining
+    /// slots are shared with (and ghost-owned by) another page-table config
+    /// (e.g. a user PT's kernel half, marked `Borrowed` at creation) and are
+    /// not tracked by this node's `nr_children` counter.
     /// Held by a settled node (see `metaregion_sound_node`'s use site).
     pub open spec fn count_consistent(self) -> bool {
-        self.meta_own.nr_children.value() == count_present(self.children_perm.value())
+        if self.level() == NR_LEVELS {
+            self.meta_own.nr_children.value() == count_present_upto(
+                self.children_perm.value(),
+                C::TOP_LEVEL_INDEX_RANGE().end as int,
+            ) - count_present_upto(
+                self.children_perm.value(),
+                C::TOP_LEVEL_INDEX_RANGE().start as int,
+            )
+        } else {
+            self.meta_own.nr_children.value() == count_present(self.children_perm.value())
+        }
     }
 }
 
@@ -311,12 +459,40 @@ impl<C: PageTableConfig> NodeOwner<C> {
         ensures
             self.meta_own.nr_children.value() < NR_ENTRIES,
     {
-        lemma_count_present_upto_absent(self.children_perm.value(), NR_ENTRIES as int, idx as int);
+        let cp = self.children_perm.value();
+        if self.level() < NR_LEVELS {
+            lemma_count_present_upto_absent(cp, NR_ENTRIES as int, idx as int);
+        } else {
+            // Top level: the counter tracks only the config window. The
+            // absent slot either lies inside `[0, end)` (shrinking the
+            // end-prefix count below `end <= NR_ENTRIES`) or at/after `end`
+            // (so the window spans at most `end <= idx < NR_ENTRIES` slots).
+            C::lemma_page_table_config_constant_properties();
+            let start = C::TOP_LEVEL_INDEX_RANGE().start as int;
+            let end = C::TOP_LEVEL_INDEX_RANGE().end as int;
+            assert(0 <= start && start < end && end <= NR_ENTRIES);
+            lemma_count_present_upto_bound(cp, start);
+            if (idx as int) < end {
+                lemma_count_present_upto_absent(cp, end, idx as int);
+                assert(count_present_upto(cp, start) >= 0);
+                assert(self.meta_own.nr_children.value() <= count_present_upto(cp, end));
+                assert(count_present_upto(cp, end) < end);
+            } else {
+                lemma_count_present_upto_bound(cp, end);
+                assert(end <= idx as int && idx < NR_ENTRIES);
+            }
+        }
     }
 
     /// If a slot in `children_perm` holds a present PTE, then `nr_children > 0`.
     /// Dual of [`Self::nr_children_absent_slot_bound`]; proven from
     /// `count_consistent`.
+    ///
+    /// At the top level the counter only covers the config window, so the
+    /// lemma needs `idx` in-window: an out-of-window slot (e.g. a shared
+    /// kernel-half PTE of a user PT, which *is* present) says nothing about
+    /// `nr_children` — a user PT with an empty user half genuinely has
+    /// `nr_children == 0` while its kernel-half PTEs are all present.
     pub proof fn nr_children_present_slot_bound(self, idx: usize)
         requires
             self.inv(),
@@ -324,10 +500,24 @@ impl<C: PageTableConfig> NodeOwner<C> {
             self.children_perm.value().len() == NR_ENTRIES,
             idx < NR_ENTRIES,
             self.children_perm.value()[idx as int].is_present(),
+            self.level() < NR_LEVELS
+                || C::TOP_LEVEL_INDEX_RANGE().start <= idx
+                    < C::TOP_LEVEL_INDEX_RANGE().end,
         ensures
             self.meta_own.nr_children.value() > 0,
     {
-        lemma_count_present_upto_present(self.children_perm.value(), NR_ENTRIES as int, idx as int);
+        let cp = self.children_perm.value();
+        if self.level() < NR_LEVELS {
+            lemma_count_present_upto_present(cp, NR_ENTRIES as int, idx as int);
+        } else {
+            C::lemma_page_table_config_constant_properties();
+            lemma_count_present_window_present(
+                cp,
+                C::TOP_LEVEL_INDEX_RANGE().start as int,
+                C::TOP_LEVEL_INDEX_RANGE().end as int,
+                idx as int,
+            );
+        }
     }
 }
 

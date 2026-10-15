@@ -2550,6 +2550,15 @@ impl<'rcu, C: PageTableConfig, A: InAtomicMode> CursorMut<'rcu, C, A> {
                     proof {
                         assert(entry_idx == owner_pre_none.continuations[owner_pre_none.level
                             - 1].idx);
+                        // Windowed top-level counting: discharge the in-window
+                        // premise of `alloc_absent_child`'s count restoration.
+                        let cont = owner_pre_none.continuations[owner_pre_none.level - 1];
+                        assert(cont.level() == owner_pre_none.level);
+                        if owner_pre_none.level == NR_LEVELS {
+                            owner_pre_none.lemma_in_locked_range_top_index_lt_top_end();
+                            assert(C::TOP_LEVEL_INDEX_RANGE().start <= entry_idx
+                                < C::TOP_LEVEL_INDEX_RANGE().end);
+                        }
                     }
                     let ghost cur_path_guard = self.0.path[cur_level - 1]->0;
 

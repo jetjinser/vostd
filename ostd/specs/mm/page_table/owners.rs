@@ -34,7 +34,9 @@ use crate::mm::{
     Paddr, PagingConstsTrait, PagingLevel, Vaddr,
     frame::meta::{REF_COUNT_MAX, REF_COUNT_UNIQUE, REF_COUNT_UNUSED},
     page_size, page_size_spec,
-    page_table::{EntryOwner, EntryOwnerKind, PageTableEntryTrait, PageTableGuard},
+    page_table::{
+        EntryOwner, EntryOwnerKind, PageTableConfig, PageTableEntryTrait, PageTableGuard,
+    },
 };
 use core::ops::{Deref, Range};
 
@@ -1520,16 +1522,21 @@ impl<C: PageTableConfig> PageTableOwner<C> {
     {
     }
 
-    /// A node with `nr_children == 0` has no present PTEs, so all children are
-    /// absent and the subtree contributes no mappings.
+    /// A node with `nr_children == 0` has no present PTEs in its managed
+    /// window, so all managed children are absent and the subtree contributes
+    /// no mappings.
     ///
-    /// `count_consistent` ties `nr_children` to `count_present(children_perm)`,
-    /// so `nr_children == 0` forces every PTE absent. `pt_edge_at` (from
-    /// `pt_inv`) then forces each ghost child `is_absent` — its `view_rec` is
-    /// `∅` — and `lemma_view_rec_contains` lifts that to the whole node's
-    /// `view_rec`. (At the top level the `borrowed` edge disjunct is ruled out:
-    /// `borrowed_match_pte` needs a *present* PTE, which `count_present == 0`
-    /// denies.)
+    /// `count_consistent` ties `nr_children` to the present count over the
+    /// config window (the whole array below the top level), so a present
+    /// managed PTE would force `nr_children >= 1`
+    /// ([`Self::lemma_count_present_upto_present`] /
+    /// `lemma_count_present_window_present`). `pt_edge_at` (from `pt_inv`)
+    /// then forces each managed ghost child `is_absent` — its `view_rec` is
+    /// `∅`. Out-of-window slots only exist at the top level; the
+    /// caller-supplied final premise bounds them to `borrowed`/`absent` ghost
+    /// children (the counter does not see them, so `pt_inv` alone cannot rule
+    /// out other kinds). Both kinds take `view_rec`'s empty else-branch, and
+    /// `lemma_view_rec_contains` lifts this to the whole node's `view_rec`.
     pub proof fn view_rec_nr_children_zero_empty(self, path: TreePath<NR_ENTRIES>)
         requires
             self.pt_inv(),
@@ -1538,12 +1545,23 @@ impl<C: PageTableConfig> PageTableOwner<C> {
             self.0.value().node().count_consistent(),
             path.len() <= INC_LEVELS - 1,
             path.len() == self.0.level(),
+            self.0.value().node().level() < NR_LEVELS
+                || (forall|k: int|
+                    #![trigger self.0.children()[k]]
+                    0 <= k < NR_ENTRIES
+                        && !(C::TOP_LEVEL_INDEX_RANGE().start <= k
+                            < C::TOP_LEVEL_INDEX_RANGE().end) && self.0.children()[k] is Some
+                        ==> (self.0.children()[k]->0).value().is_borrowed()
+                            || (self.0.children()[k]->0).value().is_absent()),
         ensures
             self.view_rec(path) == set![],
     {
         if path.len() < INC_LEVELS - 1 {
             let cp = self.0.value().node().children_perm.value();
-            // `count_consistent` + `nr_children == 0` ⟹ no present PTEs.
+            let node_level = self.0.value().node().level();
+            if node_level == NR_LEVELS {
+                C::lemma_page_table_config_constant_properties();
+            }
             self.lemma_view_rec_contains(path);
             assert forall|m: Mapping| self.view_rec(path).contains(m) implies false by {
                 let i = choose|i: int|
@@ -1553,19 +1571,47 @@ impl<C: PageTableConfig> PageTableOwner<C> {
                         path.push_tail(i),
                     ).contains(m);
                 self.pt_inv_unroll(i);
-                // PTE `i` is absent — else `count_present(cp) >= 1`.
-                if cp[i].is_present() {
-                    crate::specs::mm::page_table::node::owners::lemma_count_present_upto_present(
-                        cp,
-                        cp.len() as int,
-                        i,
-                    );
+                let child = self.0.children()[i]->0;
+                let in_window = node_level < NR_LEVELS
+                    || (C::TOP_LEVEL_INDEX_RANGE().start <= i
+                        < C::TOP_LEVEL_INDEX_RANGE().end);
+                if !in_window {
+                    // Out-of-window top-level slot: the ghost child is
+                    // `borrowed` (or absent) — either way `view_rec` takes
+                    // its empty else-branch.
+                    assert(child.value().is_borrowed() || child.value().is_absent());
+                    assert(PageTableOwner(child).view_rec(path.push_tail(i)) == set![]);
+                } else {
+                    // Managed slot: a present PTE would make the count
+                    // positive, contradicting `nr_children == 0`.
+                    if node_level == NR_LEVELS {
+                        if cp[i].is_present() {
+                            crate::specs::mm::page_table::node::owners::lemma_count_present_window_present(
+                                cp,
+                                C::TOP_LEVEL_INDEX_RANGE().start as int,
+                                C::TOP_LEVEL_INDEX_RANGE().end as int,
+                                i,
+                            );
+                            assert(false);
+                        }
+                    } else {
+                        // `count_consistent` is global below the top level.
+                        if cp[i].is_present() {
+                            crate::specs::mm::page_table::node::owners::lemma_count_present_upto_present(
+                                cp,
+                                cp.len() as int,
+                                i,
+                            );
+                            assert(false);
+                        }
+                    }
+                    // PTE `i` is absent ⟹ `borrowed_match_pte` is dead (it
+                    // needs a present PTE), so the `match_pte` disjunct holds
+                    // and forces the child `is_absent` — an absent entry is
+                    // neither frame nor node ⟹ empty `view_rec`.
+                    assert(child.value().is_absent());
+                    assert(PageTableOwner(child).view_rec(path.push_tail(i)) == set![]);
                 }
-                // `pt_edge_at`'s borrowed disjunct needs a present PTE, so it is
-                // false here; the `match_pte` disjunct holds, and `match_pte`
-                // with an absent PTE forces the child `is_absent`.
-                // An absent entry is neither frame nor node ⟹ empty `view_rec`.
-
             };
         }
     }
