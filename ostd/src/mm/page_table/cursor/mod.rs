@@ -2083,6 +2083,9 @@ impl<'rcu, C: PageTableConfig, A: InAtomicMode> CursorMut<'rcu, C, A> {
                 &&& r.unwrap().0.0.va < r.unwrap().0.0.barrier_va.end
                 &&& r.unwrap().0.0.va == va.start
                 &&& r.unwrap().0.0.barrier_va == *va
+                // The cursor owner's collapsed tree is the supplied owner
+                // (owner supply loop; proven by `lock_range`).
+                &&& r.unwrap().1@.as_page_table_owner() == pt_own
             },
             !Cursor::<C, A>::cursor_new_success_conditions(*va) ==> r is Err,
             // cursor_mut only acquires locks on page-table node slots; it does not

@@ -1437,6 +1437,9 @@ impl<C: PageTableConfig> PageTable<C> {
                 &&& r.unwrap().0.0.va < r.unwrap().0.0.barrier_va.end
                 &&& r.unwrap().0.0.va == va.start
                 &&& r.unwrap().0.0.barrier_va == *va
+                // The cursor owner's collapsed tree is the supplied owner
+                // (owner supply loop; proven by `lock_range`).
+                &&& r.unwrap().1@.as_page_table_owner() == owner
             },
             !Cursor::<C, G>::cursor_new_success_conditions(*va) ==> r is Err,
             forall |item: C::Item| #![trigger CursorMut::<'rcu, C, G>::item_not_mapped(item, *old(regions))]

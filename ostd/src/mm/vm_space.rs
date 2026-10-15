@@ -230,6 +230,24 @@ impl<'a> VmSpace<'a> {
         }
     }
 
+    /// Takes the tracked owner of this VM space's page table out of the
+    /// `VmSpace`.
+    ///
+    /// This is the sanctioned way for a caller to obtain the owner that a
+    /// cursor construction must supply: the returned owner is *the* one built
+    /// by `create_user_page_table` (carrying the borrowed-kernel-half
+    /// marking), not a value fabricated at the call site.  The underlying
+    /// `PageTableOwner` is a linear resource, so once taken it is no longer
+    /// available through `self`.
+    #[verus_spec(r =>
+        ensures
+            r@ == self.pt_own@,
+    )]
+    #[allow(private_interfaces)]
+    pub fn into_owner(self) -> Tracked<PageTableOwner<UserPtConfig>> {
+        self.pt_own
+    }
+
     /// Gets an immutable cursor in the virtual address range.
     ///
     /// The cursor behaves like a lock guard, exclusively owning a sub-tree of
@@ -257,8 +275,27 @@ impl<'a> VmSpace<'a> {
             self.pt.relates_owner(owner, *old(regions)),
             owner.0.value().node().relate_guard(root_guard),
             va.end > 0,
+            // Supply contract: the owner must be a create-built one, i.e. it
+            // carries the borrowed-kernel-half marking established by
+            // `create_user_page_table` (available from `Self::new`'s ensures
+            // or via `Self::into_owner`).  A value fabricated at the call site
+            // cannot satisfy this.
+            crate::specs::mm::page_table::marked_borrowed_slots(
+                owner.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
         ensures
             crate::mm::page_table::Cursor::<UserPtConfig, G>::cursor_new_success_conditions(*va) ==> (r matches Ok(_) && cursor_owner@ matches Some(_)),
+            // The returned cursor owner inherits the create-time marking: the
+            // cursor's collapsed owner equals the supplied one
+            // (`PageTable::cursor`'s `as_page_table_owner` postcondition, which
+            // `lock_range` now proves instead of assuming).
+            cursor_owner@ matches Some(c) ==> crate::specs::mm::page_table::marked_borrowed_slots(
+                c.as_page_table_owner().0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
             // On the success branch, the returned cursor owner satisfies
             // its invariant. Follows from the underlying PT::cursor's
             // ensures: r is Ok ⇒ cursor_new_success_conditions (by
@@ -318,8 +355,21 @@ impl<'a> VmSpace<'a> {
             self.pt.relates_owner(owner, *old(regions)),
             owner.0.value().node().relate_guard(root_guard),
             va.end > 0,
+            // Supply contract, same as `cursor`: the owner must carry the
+            // create-time borrowed-kernel-half marking.
+            crate::specs::mm::page_table::marked_borrowed_slots(
+                owner.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
         ensures
             crate::mm::page_table::Cursor::<UserPtConfig, G>::cursor_new_success_conditions(*va) ==> (r matches Ok(_) && cursor_owner@ matches Some(_)),
+            // The returned cursor owner inherits the create-time marking.
+            cursor_owner@ matches Some(c) ==> crate::specs::mm::page_table::marked_borrowed_slots(
+                c.as_page_table_owner().0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
             // See `cursor` above for the derivation.
             cursor_owner@ matches Some(c) ==> c.inv(),
     )]
