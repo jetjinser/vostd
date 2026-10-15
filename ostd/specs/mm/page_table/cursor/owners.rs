@@ -416,6 +416,9 @@ impl<'rcu, C: PageTableConfig> CursorContinuation<'rcu, C> {
         guards.lock_held(self.guard.inner.inner@.ptr.addr())
     }
 
+    /// The union of all mappings in this continuation's ghost children.
+    /// `borrowed` children (shared kernel-half edges at the top level of a
+    /// user PT) contribute nothing: their `view_rec` is empty.
     pub open spec fn view_mappings(self) -> Set<Mapping> {
         self.children.map(
             |i, child: Option<OwnerSubtree<C>>|

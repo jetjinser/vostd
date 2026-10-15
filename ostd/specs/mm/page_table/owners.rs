@@ -964,6 +964,12 @@ impl<C: PageTableConfig> PageTableOwner<C> {
         )
     }
 
+    /// The abstract set of mappings owned by the subtree rooted at this
+    /// entry. Frames contribute their singleton; nodes recurse over their
+    /// ghost children; `absent` and `borrowed` entries (the latter are the
+    /// translation-only shared kernel-half edges of a user PT) take the
+    /// empty else-branch — a borrowed edge's sub-tree is owned by another
+    /// page-table config and contributes nothing to this tree's view.
     pub open spec fn view_rec(self, path: TreePath<NR_ENTRIES>) -> Set<Mapping>
         decreases INC_LEVELS - path.len(), 1nat,
         when self.0.inv() && path.len() <= INC_LEVELS - 1
