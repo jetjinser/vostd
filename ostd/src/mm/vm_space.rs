@@ -138,6 +138,12 @@ pub struct VmSpace<'a> {
     pub pt: PageTable<UserPtConfig>,
     pub cpus: AtomicCpuSet,
     pub _marker: PhantomData<&'a ()>,
+    /// The tracked ownership tree of `pt`, carrying the borrowed-kernel-half
+    /// marking established at creation (`create_user_page_table`). Stored so
+    /// the create-time owner facts are available at the `VmSpace` boundary
+    /// instead of being re-fabricated by cursor callers. This is a `Tracked`
+    /// (zero-sized at runtime) field: it changes no executable layout.
+    pub pt_own: Tracked<PageTableOwner<UserPtConfig>>,
 }
 
 type Result<A> = core::result::Result<A, Error>;
@@ -177,6 +183,25 @@ impl<'a> VmSpace<'a> {
             old(regions).inv(),
         ensures
             final(regions).inv(),
+            // The `VmSpace` stores the freshly-built user PT owner together
+            // with its borrowed-kernel-half marking. These are exactly the
+            // create-side facts `create_user_page_table` now exports; the
+            // `VmSpace` boundary is where cursor construction can pick them
+            // up instead of fabricating an owner.
+            r.pt_own@.0.value().is_node(),
+            r.pt_own@.0.value().node().level() == crate::mm::NR_LEVELS,
+            r.pt_own@.0.value().path == vstd_extra::ghost_tree::TreePath::<NR_ENTRIES>::new(
+                Seq::empty(),
+            ),
+            r.pt.root.ptr.addr() == r.pt_own@.0.value().node().slot_vaddr(),
+            crate::specs::mm::page_table::marked_borrowed_slots(
+                r.pt_own@.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
+            final(regions).contains(
+                crate::specs::mm::frame::mapping::frame_to_index(
+                    r.pt_own@.0.value().meta_slot_paddr()->0)),
     )]
     #[allow(private_interfaces)]
     pub fn new<'rcu>() -> Self {
@@ -197,10 +222,12 @@ impl<'a> VmSpace<'a> {
             #[verus_spec(with Tracked(kernel_owner), Tracked(regions), Tracked(guards) => Tracked(user_pt_owner))]
             kpt.create_user_page_table::<crate::specs::task::AnyAtomicGuard>()
         };
-        // TODO(supply-loop): stored on `VmSpace` in the next step; here the
-        // owner facts cross the Verus boundary and the tracked local carries
-        // them into the function (dropped for now).
-        Self { pt, cpus: AtomicCpuSet::new(CpuSet::new_empty()), _marker: PhantomData }
+        Self {
+            pt,
+            cpus: AtomicCpuSet::new(CpuSet::new_empty()),
+            _marker: PhantomData,
+            pt_own: Tracked(user_pt_owner),
+        }
     }
 
     /// Gets an immutable cursor in the virtual address range.
