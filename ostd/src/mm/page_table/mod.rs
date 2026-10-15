@@ -953,6 +953,7 @@ impl PageTable<KernelPtConfig> {
         with Tracked(kernel_owner): Tracked<&PageTableOwner<KernelPtConfig>>,
             Tracked(regions): Tracked<&mut MetaRegionOwners>,
             Tracked(guards): Tracked<&mut Guards>,
+                -> owner: Tracked<PageTableOwner<UserPtConfig>>,
         requires
             kernel_owner.inv(),
             old(regions).inv(),
@@ -971,6 +972,24 @@ impl PageTable<KernelPtConfig> {
             old(guards).unlocked(kernel_owner.0.value().node().slot_vaddr()),
         ensures
             final(regions).inv(),
+            // The freshly-built user PT ownership tree crosses the Verus
+            // boundary here, carrying the borrowed-kernel-half marking landed
+            // by `mark_borrowed_children` (see the proof block at the end of
+            // the body). This is the create-side half of the supply loop: the
+            // owner facts are now stated contracts, not dropped locals.
+            owner@.0.value().is_node(),
+            owner@.0.value().node().level() == NR_LEVELS,
+            owner@.0.value().path == vstd_extra::ghost_tree::TreePath::<NR_ENTRIES>::new(
+                Seq::empty(),
+            ),
+            r.root.ptr.addr() == owner@.0.value().node().slot_vaddr(),
+            crate::specs::mm::page_table::marked_borrowed_slots(
+                owner@.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ),
+            final(regions).contains(
+                frame_to_index(owner@.0.value().meta_slot_paddr()->0)),
     )]
     pub(in crate::mm) fn create_user_page_table<'rcu, G: InAtomicMode + 'static>(
         &'static self,
@@ -1059,6 +1078,14 @@ impl PageTable<KernelPtConfig> {
                 new_node_owner.inv(),
                 new_node_owner.relate_guard(new_node),
                 regions.contains(new_node_owner.slot_index),
+                // Root-node identity facts of the fresh user PT. The loop
+                // body never touches `new_pt_owner_val`, and `write_pte`
+                // preserves level and slot_index, so these are preserved
+                // verbatim; they back the owner facts in the ensures.
+                new_node_owner.level() == NR_LEVELS,
+                new_node_owner.slot_vaddr() == new_root.ptr.addr(),
+                regions.contains(
+                    frame_to_index(crate::mm::frame::meta::mapping::meta_to_frame(new_node_owner.slot_vaddr()))),
                 // Ghost-tree facts of the fresh user PT's root. The loop body
                 // never touches `new_pt_owner_val`, so these are preserved
                 // verbatim; they feed `mark_borrowed_children` after the loop.
@@ -1181,13 +1208,27 @@ impl PageTable<KernelPtConfig> {
             assert(crate::specs::mm::page_table::allocated_empty_node_grandchildren_none(
                 new_pt_owner_val.0,
             ));
+            // Restore the root node owner taken at the top of the function
+            // (`tracked_take_node` swaps the root value to an `Absent` stub
+            // while the loop writes PTEs through `new_node_owner`). Without
+            // this the returned owner tree would be rooted at a stub, not at
+            // the real node. Restore BEFORE marking so that the marking
+            // contract directly applies to the fully-restored tree.
+            let tracked mut root_value = new_pt_owner_val.0.tracked_borrow_mut_value();
+            root_value.tracked_put_node(new_node_owner);
             crate::specs::mm::page_table::mark_borrowed_children(
                 &mut new_pt_owner_val.0,
                 KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
                 KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
             );
+            assert(crate::specs::mm::page_table::marked_borrowed_slots(
+                new_pt_owner_val.0,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().start,
+                KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end,
+            ));
         }
 
+        proof_with!(|= Tracked(new_pt_owner_val));
         PageTable::<UserPtConfig> { root: new_root }
     }/*
     /// Protect the given virtual address range in the kernel page table.

@@ -190,10 +190,16 @@ impl<'a> VmSpace<'a> {
         proof_decl! {
             let tracked kernel_owner = kernel_owner_opt.tracked_take();
         }
+        proof_decl! {
+            let tracked mut user_pt_owner: PageTableOwner<UserPtConfig>;
+        }
         let pt = {
-            #[verus_spec(with Tracked(kernel_owner), Tracked(regions), Tracked(guards))]
+            #[verus_spec(with Tracked(kernel_owner), Tracked(regions), Tracked(guards) => Tracked(user_pt_owner))]
             kpt.create_user_page_table::<crate::specs::task::AnyAtomicGuard>()
         };
+        // TODO(supply-loop): stored on `VmSpace` in the next step; here the
+        // owner facts cross the Verus boundary and the tracked local carries
+        // them into the function (dropped for now).
         Self { pt, cpus: AtomicCpuSet::new(CpuSet::new_empty()), _marker: PhantomData }
     }
 
