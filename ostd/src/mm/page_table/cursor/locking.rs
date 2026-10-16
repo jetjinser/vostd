@@ -172,10 +172,9 @@ pub fn lock_range<'rcu, C: PageTableConfig, A: InAtomicMode>(
 
     // Once we have locked the sub-tree that is not stray, we won't read any
     // stray nodes in the following traversal since we must lock before reading.
-    // Keep the deepest continuation inside the owner tree: it is *borrowed*
-    // (not removed). Removing it used to leave the returned `CursorOwner` with
-    // a hole at `level - 1`, which made `as_page_table_owner` ill-defined and
-    // forced the owner-tree equalities to be assumed.
+    // The deepest continuation stays *borrowed* inside the owner tree (not
+    // removed), so `as_page_table_owner` on the returned `CursorOwner` remains
+    // well-defined.
     let tracked cont_ref = cursor_own.continuations.tracked_borrow(cursor_own.level - 1);
     let ghost cont_slot_idx = cont_ref.entry_own.tracked_borrow_node().slot_index;
     proof {
@@ -213,71 +212,51 @@ pub fn lock_range<'rcu, C: PageTableConfig, A: InAtomicMode>(
     // are superseded by the CortenMM version. They should be merged, first
     // at the spec level, then the code.
     proof {
-        // Owner-tree collapse (former assume clause 5): follows from the loop
-        // invariant, which `try_traverse_and_lock_subtree_root` preserves.
+        // Owner-tree collapse: the traversal loop's invariant preserves the
+        // supplied owner verbatim, so collapsing the cursor owner
+        // reconstructs `pt_own`.
         assert((*res.1).as_page_table_owner() == pt_own);
-        // Root-path consistency (former assume clause 6): the top-level
-        // continuation's `path()` projects its `entry_own.path`, which the
-        // collapse above pins to the input root's path.
+        // Root-path consistency: the top-level continuation's `path()`
+        // projects its `entry_own.path`, which the collapse above pins to the
+        // input root's path.
         assert((*res.1).continuations[3].path() == pt_own.0.value().path);
-        // Remaining trusted surface, declared explicitly.
-        //
-        // NOTE (root cause): in the previous revision this whole tail was
-        // *vacuous*.  `lock_range` removed the deepest continuation from
-        // `cursor_own.continuations` before building `res`, so `res.1` had a
-        // hole at `level - 1`; the `assume(res.0.invariants(...))` below was
-        // then jointly unsatisfiable and every postcondition after it passed
-        // vacuously.  The `assert(false)` probe verifies at the base revision
-        // but fails here — the owner is now coherent (the continuation is
-        // borrowed, not removed), so the formerly-vacuous clauses fail on
-        // their own merits and are listed explicitly:
-        //  - `invariants(...)`: full cursor/owner structural invariants
-        //    (needs lock-set facts, tree-wide `metaregion_sound`, `Cursor::wf`
-        //    from the traversal contract);
-        //  - `in_locked_range()`: locked-range containment (needs the
-        //    continuation index/level alignment arithmetic);
-        //  - `guard_level == NR_LEVELS`: subtree-root level pin
-        //    (`try_traverse_and_lock_subtree_root` only bounds the level);
-        //  - region bookkeeping preservation (paths_in_pt / refcount / usage /
-        //    saturation / item-not-mapped) and refcount non-saturation
-        //    propagation. These mirror that traversal helper's own ensures and
-        //    are the intended next proof step (region loop invariants;
-        //    prototyped, SMT-side recommends/quantifier instantiations remain).
-        //
-        // Proved here (no longer assumed): the owner-tree collapse
-        // (`(*ret.1).as_page_table_owner() == pt_own`, former clause 5) and
-        // the root-path consistency (former clause 6) — from the
-        // owner-preservation loop invariant plus the traversal helper's new
-        // contract; and `ret.0.level == ret.0.guard_level`, `ret.0.va ==
-        // va.start`, `ret.0.barrier_va == *va`, `ret.0.va < ret.0.barrier_va.end`
-        // by construction.
+        // Trusted remainder, declared explicitly instead of proved: full
+        // cursor/owner structural invariants, locked-range containment, the
+        // subtree-root level pin, and meta-region bookkeeping preservation
+        // (paths_in_pt / refcount / usage / saturation / item-not-mapped).
+        // These mirror `try_traverse_and_lock_subtree_root`'s own ensures and
+        // are the next proof obligation to discharge (region loop invariants).
         assume(res.0.invariants(*res.1, *regions, *guards) && (*res.1).in_locked_range()
-            && res.0.guard_level == NR_LEVELS
-            && (forall|idx: int| #![trigger final(regions).slot_owners[idx].paths_in_pt]
-                old(regions).ref_count(idx) != REF_COUNT_UNUSED
-                ==> final(regions).slot_owners[idx].paths_in_pt
-                    == old(regions).slot_owners[idx].paths_in_pt)
-            && (forall|idx: int| #![trigger final(regions).slot_owners[idx]]
-                old(regions).contains(idx) && old(regions).ref_count(idx) != REF_COUNT_UNUSED
+            && res.0.guard_level == NR_LEVELS && (forall|idx: int|
+            #![trigger final(regions).slot_owners[idx].paths_in_pt]
+            old(regions).ref_count(idx) != REF_COUNT_UNUSED
+                ==> final(regions).slot_owners[idx].paths_in_pt == old(
+                regions,
+            ).slot_owners[idx].paths_in_pt) && (forall|idx: int|
+            #![trigger final(regions).slot_owners[idx]]
+            old(regions).contains(idx) && old(regions).ref_count(idx) != REF_COUNT_UNUSED
                 ==> final(regions).ref_count(idx) == old(regions).ref_count(idx)
-                    && final(regions).slot_owners[idx].usage
-                        == old(regions).slot_owners[idx].usage)
-            && (forall|idx: int| #![trigger final(regions).slot_owners[idx].ref_count()]
-                final(regions).ref_count(idx) >= REF_COUNT_MAX
-                ==> old(regions).ref_count(idx) == final(regions).ref_count(idx))
-            && (forall|idx: int| #![trigger old(regions).slot_owners[idx].ref_count()]
-                old(regions).ref_count(idx) >= REF_COUNT_MAX
-                ==> final(regions).ref_count(idx) == old(regions).ref_count(idx))
-            && ((forall|i: int| #![trigger old(regions).slot_owners[i]]
-                old(regions).contains(i) && old(regions).ref_count(i) != REF_COUNT_UNUSED
-                ==> old(regions).ref_count(i) + 1 < REF_COUNT_MAX)
-            ==> (forall|i: int| #![trigger final(regions).slot_owners[i]]
-                final(regions).contains(i) && final(regions).ref_count(i) != REF_COUNT_UNUSED
-                ==> final(regions).ref_count(i) + 1 < REF_COUNT_MAX))
-            && (forall|item: C::Item|
-                #![trigger CursorMut::<C, A>::item_not_mapped(item, *old(regions))]
-                CursorMut::<C, A>::item_not_mapped(item, *old(regions))
-                    ==> CursorMut::<C, A>::item_not_mapped(item, *regions)));
+                && final(regions).slot_owners[idx].usage == old(regions).slot_owners[idx].usage)
+            && (forall|idx: int|
+            #![trigger final(regions).slot_owners[idx].ref_count()]
+            final(regions).ref_count(idx) >= REF_COUNT_MAX ==> old(regions).ref_count(idx)
+                == final(regions).ref_count(idx)) && (forall|idx: int|
+            #![trigger old(regions).slot_owners[idx].ref_count()]
+            old(regions).ref_count(idx) >= REF_COUNT_MAX ==> final(regions).ref_count(idx) == old(
+                regions,
+            ).ref_count(idx)) && ((forall|i: int|
+            #![trigger old(regions).slot_owners[i]]
+            old(regions).contains(i) && old(regions).ref_count(i) != REF_COUNT_UNUSED ==> old(
+                regions,
+            ).ref_count(i) + 1 < REF_COUNT_MAX) ==> (forall|i: int|
+            #![trigger final(regions).slot_owners[i]]
+            final(regions).contains(i) && final(regions).ref_count(i) != REF_COUNT_UNUSED
+                ==> final(regions).ref_count(i) + 1 < REF_COUNT_MAX)) && (forall|item: C::Item|
+            #![trigger CursorMut::<C, A>::item_not_mapped(item, *old(regions))]
+            CursorMut::<C, A>::item_not_mapped(item, *old(regions)) ==> CursorMut::<
+                C,
+                A,
+            >::item_not_mapped(item, *regions)));
     }
     res
 }

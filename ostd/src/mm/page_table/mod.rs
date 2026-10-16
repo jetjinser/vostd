@@ -975,8 +975,7 @@ impl PageTable<KernelPtConfig> {
             // The freshly-built user PT ownership tree crosses the Verus
             // boundary here, carrying the borrowed-kernel-half marking landed
             // by `mark_borrowed_children` (see the proof block at the end of
-            // the body). This is the create-side half of the supply loop: the
-            // owner facts are now stated contracts, not dropped locals.
+            // the body). This is the create-side half of the owner supply loop.
             owner@.0.value().is_node(),
             owner@.0.value().node().level() == NR_LEVELS,
             owner@.0.value().path == vstd_extra::ghost_tree::TreePath::<NR_ENTRIES>::new(
@@ -1085,7 +1084,10 @@ impl PageTable<KernelPtConfig> {
                 new_node_owner.level() == NR_LEVELS,
                 new_node_owner.slot_vaddr() == new_root.ptr.addr(),
                 regions.contains(
-                    frame_to_index(crate::mm::frame::meta::mapping::meta_to_frame(new_node_owner.slot_vaddr()))),
+                    frame_to_index(
+                        crate::mm::frame::meta::mapping::meta_to_frame(new_node_owner.slot_vaddr()),
+                    ),
+                ),
                 // Ghost-tree facts of the fresh user PT's root. The loop body
                 // never touches `new_pt_owner_val`, so these are preserved
                 // verbatim; they feed `mark_borrowed_children` after the loop.
@@ -1095,8 +1097,9 @@ impl PageTable<KernelPtConfig> {
                     0 <= j < NR_ENTRIES ==> new_pt_owner_val.0.children()[j] is Some,
                 forall|i: int, j: int|
                     #![trigger new_pt_owner_val.0.children()[i]->0.children()[j]]
-                    0 <= i < NR_ENTRIES && 0 <= j < NR_ENTRIES
-                        ==> !new_pt_owner_val.0.child(i).has_child(j),
+                    0 <= i < NR_ENTRIES && 0 <= j < NR_ENTRIES ==> !new_pt_owner_val.0.child(
+                        i,
+                    ).has_child(j),
             decreases KernelPtConfig::TOP_LEVEL_INDEX_RANGE().end - i,
         {
             proof {

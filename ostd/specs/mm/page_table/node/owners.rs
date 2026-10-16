@@ -29,10 +29,13 @@ use crate::mm::{
 verus! {
 
 // ─── Present-PTE counting ──────────────────────────────────────────────────────
-// The intended meaning of `nr_children`: the number of *present* PTEs in the
-// node's `children_perm` array. `metaregion_sound_node` ties `nr_children` to
-// `count_present(children_perm.value())` (a settled-node invariant), which lets
-// the `nr_children_*_slot_bound` boundary facts be proven rather than axiomatized.
+// The intended meaning of `nr_children`: the number of *present* PTEs among the
+// node's managed slots — the whole `children_perm` array below the top level,
+// the config's `TOP_LEVEL_INDEX_RANGE` window at the top level (the remaining
+// top-level slots are shared with, and ghost-owned by, another page-table
+// config). `metaregion_sound_node` ties `nr_children` to that count (a
+// settled-node invariant), which lets the `nr_children_*_slot_bound` boundary
+// facts be proven rather than axiomatized.
 /// Number of present PTEs among the first `n` entries of `s`.
 pub open spec fn count_present_upto<E: PageTableEntryTrait>(s: Seq<E>, n: int) -> int
     decreases n,
@@ -51,6 +54,16 @@ pub open spec fn count_present_upto<E: PageTableEntryTrait>(s: Seq<E>, n: int) -
 /// Number of present PTEs in `s`.
 pub open spec fn count_present<E: PageTableEntryTrait>(s: Seq<E>) -> int {
     count_present_upto(s, s.len() as int)
+}
+
+/// Whether a node at `level` counts slot `idx` toward its `nr_children`
+/// counter (`NodeOwner::count_consistent`): the whole `children_perm` array
+/// below the top level, only the config's `TOP_LEVEL_INDEX_RANGE` window at
+/// the top level. Out-of-window top-level slots are shared with (and
+/// ghost-owned by) another page-table config, so their present-status is not
+/// tracked by this node's counter.
+pub open spec fn in_count_window<C: PageTableConfig>(level: PagingLevel, idx: int) -> bool {
+    level < NR_LEVELS || C::TOP_LEVEL_INDEX_RANGE().start <= idx < C::TOP_LEVEL_INDEX_RANGE().end
 }
 
 /// `count_present_upto` is between `0` and `n`.
@@ -164,11 +177,7 @@ pub proof fn lemma_count_present_upto_unchanged<E: PageTableEntryTrait>(
 }
 
 /// `count_present_upto` is monotone in `n`.
-pub proof fn lemma_count_present_upto_monotone<E: PageTableEntryTrait>(
-    s: Seq<E>,
-    n1: int,
-    n2: int,
-)
+pub proof fn lemma_count_present_upto_monotone<E: PageTableEntryTrait>(s: Seq<E>, n1: int, n2: int)
     requires
         0 <= n1 <= n2,
     ensures
@@ -221,30 +230,27 @@ pub proof fn lemma_count_consistent_after_update<C: PageTableConfig>(
     requires
         s.len() == NR_ENTRIES,
         0 <= idx < NR_ENTRIES,
-        level < NR_LEVELS
-            || C::TOP_LEVEL_INDEX_RANGE().start <= idx
-                < C::TOP_LEVEL_INDEX_RANGE().end
-            || new_pte.is_present() == s[idx].is_present(),
-        nr_children_new - nr_children_old
-            == (if new_pte.is_present() {
-                1int
-            } else {
-                0int
-            }) - (if s[idx].is_present() {
-                1int
-            } else {
-                0int
-            }),
+        in_count_window::<C>(level, idx) || new_pte.is_present() == s[idx].is_present(),
+        nr_children_new - nr_children_old == (if new_pte.is_present() {
+            1int
+        } else {
+            0int
+        }) - (if s[idx].is_present() {
+            1int
+        } else {
+            0int
+        }),
         level < NR_LEVELS ==> nr_children_old == count_present(s),
-        level == NR_LEVELS ==> nr_children_old
-            == count_present_upto(s, C::TOP_LEVEL_INDEX_RANGE().end as int)
-                - count_present_upto(s, C::TOP_LEVEL_INDEX_RANGE().start as int),
+        level == NR_LEVELS ==> nr_children_old == count_present_upto(
+            s,
+            C::TOP_LEVEL_INDEX_RANGE().end as int,
+        ) - count_present_upto(s, C::TOP_LEVEL_INDEX_RANGE().start as int),
     ensures
-        level < NR_LEVELS ==> nr_children_new
-            == count_present(s.update(idx, new_pte)),
-        level == NR_LEVELS ==> nr_children_new
-            == count_present_upto(s.update(idx, new_pte), C::TOP_LEVEL_INDEX_RANGE().end as int)
-                - count_present_upto(s.update(idx, new_pte), C::TOP_LEVEL_INDEX_RANGE().start as int),
+        level < NR_LEVELS ==> nr_children_new == count_present(s.update(idx, new_pte)),
+        level == NR_LEVELS ==> nr_children_new == count_present_upto(
+            s.update(idx, new_pte),
+            C::TOP_LEVEL_INDEX_RANGE().end as int,
+        ) - count_present_upto(s.update(idx, new_pte), C::TOP_LEVEL_INDEX_RANGE().start as int),
 {
     let s2 = s.update(idx, new_pte);
     let delta = (if new_pte.is_present() {
@@ -395,9 +401,8 @@ impl<C: PageTableConfig> NodeOwner<C> {
         self.meta_value().level
     }
 
-    /// Regions-tied invariants that used to live in `NodeOwner::inv()` via
-    /// the now-removed `meta_perm` field. Establishes the bridge between
-    /// the NodeOwner and the slot perm parked in regions.
+    /// The regions-tied invariants of a settled page-table node: bridges the
+    /// `NodeOwner` and the slot perm parked in `regions`.
     pub open spec fn metaregion_sound_node(self, regions: MetaRegionOwners) -> bool {
         let idx = self.slot_index;
         &&& regions.contains(idx)
@@ -500,9 +505,7 @@ impl<C: PageTableConfig> NodeOwner<C> {
             self.children_perm.value().len() == NR_ENTRIES,
             idx < NR_ENTRIES,
             self.children_perm.value()[idx as int].is_present(),
-            self.level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(self.level(), idx as int),
         ensures
             self.meta_own.nr_children.value() > 0,
     {

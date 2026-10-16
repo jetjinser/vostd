@@ -284,7 +284,7 @@ impl<C: PageTableConfig, const L: usize> TreeNodeValue<L> for EntryOwner<C> {
     proof fn lemma_default_preserves_la_inv() {
     }
 
-    // PT-specific per-edge facts now live in `PageTableOwner::pt_inv` /
+    // PT-specific per-edge facts live in `PageTableOwner::pt_inv` /
     // `CursorContinuation::pt_inv_children`.
     open spec fn rel_children(self, i: int, child: Option<Self>) -> bool {
         true
@@ -380,8 +380,9 @@ pub open spec fn marked_borrowed_slots<C: PageTableConfig>(
     end: usize,
 ) -> bool {
     forall|j: int|
-        start <= j < end ==> #[trigger] owner.child(j).value().is_borrowed()
-            && !owner.child(j).has_child(0)
+        start <= j < end ==> #[trigger] owner.child(j).value().is_borrowed() && !owner.child(
+            j,
+        ).has_child(0)
 }
 
 /// Pointwise projection of [`marked_borrowed_slots`]: avoids relying on
@@ -411,44 +412,45 @@ pub proof fn lemma_allocated_child_facts_all<C: PageTableConfig>(
     requires
         allocated_empty_node_owner(owner, level),
     ensures
-        forall|k: int| #![trigger owner.children()[k]]
+        forall|k: int|
+            #![trigger owner.children()[k]]
             0 <= k < NR_ENTRIES ==> owner.children()[k] is Some,
-        forall|k: int| #![trigger owner.children()[k]]
+        forall|k: int|
+            #![trigger owner.children()[k]]
             0 <= k < NR_ENTRIES ==> owner.child(k).value().is_absent(),
-        forall|k: int| #![trigger owner.children()[k]]
-            0 <= k < NR_ENTRIES ==> owner.child(k).value().path
-                == owner.value().path.push_tail(k),
-        forall|k: int| #![trigger owner.children()[k]]
+        forall|k: int|
+            #![trigger owner.children()[k]]
+            0 <= k < NR_ENTRIES ==> owner.child(k).value().path == owner.value().path.push_tail(k),
+        forall|k: int|
+            #![trigger owner.children()[k]]
             0 <= k < NR_ENTRIES ==> owner.child(k).level() == (INC_LEVELS - level) as nat,
 {
     reveal_with_fuel(vstd_extra::ghost_tree::TreeNode::inv, 2);
     assert(owner.inv());
     assert(owner.value().node().inv());
     assert(1 <= level <= NR_LEVELS);
-    assert forall|k: int| #![trigger owner.children()[k]]
-        0 <= k < NR_ENTRIES
-        implies
-            owner.children()[k] is Some
-                && owner.child(k).value().is_absent()
-                && owner.child(k).value().path == owner.value().path.push_tail(k)
-                && owner.child(k).level() == owner.level() + 1
-        by {
+    assert forall|k: int|
+        #![trigger owner.children()[k]]
+        0 <= k < NR_ENTRIES implies owner.children()[k] is Some && owner.child(
+        k,
+    ).value().is_absent() && owner.child(k).value().path == owner.value().path.push_tail(k)
+        && owner.child(k).level() == owner.level() + 1 by {
         assert(owner.has_child(k));
     }
 }
 
 /// Trigger-friendly bridge over `allocated_empty_node_grandchildren_none`.
-pub proof fn lemma_allocated_no_grandchildren_all<C: PageTableConfig>(
-    owner: OwnerSubtree<C>,
-)
+pub proof fn lemma_allocated_no_grandchildren_all<C: PageTableConfig>(owner: OwnerSubtree<C>)
     requires
         allocated_empty_node_grandchildren_none(owner),
     ensures
-        forall|k: int, l: int| #![trigger owner.child(k).has_child(l)]
+        forall|k: int, l: int|
+            #![trigger owner.child(k).has_child(l)]
             0 <= k < NR_ENTRIES && 0 <= l < NR_ENTRIES ==> !owner.child(k).has_child(l),
 {
-    assert forall|k: int, l: int| 0 <= k < NR_ENTRIES && 0 <= l < NR_ENTRIES
-        implies !owner.child(k).has_child(l) by {
+    assert forall|k: int, l: int| 0 <= k < NR_ENTRIES && 0 <= l < NR_ENTRIES implies !owner.child(
+        k,
+    ).has_child(l) by {
         assert(!owner.child(k).has_child(l));
     }
 }
@@ -473,18 +475,18 @@ pub proof fn mark_borrowed_children_at<C: PageTableConfig>(
         start <= i <= end,
         end <= NR_ENTRIES,
         old(owner).children().len() == NR_ENTRIES,
-        forall|j: int|
-            0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
+        forall|j: int| 0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
         allocated_empty_node_grandchildren_none(*old(owner)),
-            marked_borrowed_slots(*old(owner), start, i),
+        marked_borrowed_slots(*old(owner), start, i),
     ensures
         final(owner).value() == old(owner).value(),
         final(owner).level() == old(owner).level(),
         final(owner).children().len() == NR_ENTRIES,
         forall|j: int|
-            0 <= j < i || end <= j < NR_ENTRIES
-                ==> (#[trigger] final(owner).children()[j]) == old(owner).children()[j],
-            marked_borrowed_slots(*final(owner), start, end),
+            0 <= j < i || end <= j < NR_ENTRIES ==> (#[trigger] final(owner).children()[j]) == old(
+                owner,
+            ).children()[j],
+        marked_borrowed_slots(*final(owner), start, end),
     decreases end - i,
 {
     broadcast use vstd::seq::group_seq_lemmas;
@@ -503,8 +505,9 @@ pub proof fn mark_borrowed_children_at<C: PageTableConfig>(
         ));
         assert(final(child_node).children() == old(owner).child(i as int).children());
         assert forall|a: int, b: int|
-            0 <= a < NR_ENTRIES && 0 <= b < NR_ENTRIES
-            implies !#[trigger] owner.child(a).has_child(b) by {
+            0 <= a < NR_ENTRIES && 0 <= b < NR_ENTRIES implies !#[trigger] owner.child(a).has_child(
+            b,
+        ) by {
             if a == i as int {
                 assert(owner.child(a) == *final(child_node));
                 assert(!old(owner).child(a).has_child(b));
@@ -513,10 +516,10 @@ pub proof fn mark_borrowed_children_at<C: PageTableConfig>(
                 assert(!old(owner).child(a).has_child(b));
             }
         }
-        assert forall|j: int|
-            (start <= j && j < (i + 1) as int) implies
-            ((owner.children()[j])->0).value().is_borrowed()
-                && !((owner.children()[j])->0).has_child(0) by {
+        assert forall|j: int| (start <= j && j < (i + 1) as int) implies ((
+        owner.children()[j])->0).value().is_borrowed() && !((owner.children()[j])->0).has_child(
+            0,
+        ) by {
             let c = (owner.children()[j])->0;
             if j == i as int {
                 assert(c == owner.child(j));
@@ -532,6 +535,7 @@ pub proof fn mark_borrowed_children_at<C: PageTableConfig>(
         mark_borrowed_children_at(owner, start, end, (i + 1) as usize);
     }
 }
+
 /// Marks `owner.children[start..end]` as borrowed kernel-half edges in one
 /// call; see `mark_borrowed_children_at` for the contract details.
 pub proof fn mark_borrowed_children<C: PageTableConfig>(
@@ -543,17 +547,16 @@ pub proof fn mark_borrowed_children<C: PageTableConfig>(
         start <= end,
         end <= NR_ENTRIES,
         old(owner).children().len() == NR_ENTRIES,
-        forall|j: int|
-            0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
+        forall|j: int| 0 <= j < NR_ENTRIES ==> (#[trigger] old(owner).children()[j]) is Some,
         allocated_empty_node_grandchildren_none(*old(owner)),
     ensures
         final(owner).value() == old(owner).value(),
         final(owner).level() == old(owner).level(),
         final(owner).children().len() == NR_ENTRIES,
         forall|j: int|
-            0 <= j < start || end <= j < NR_ENTRIES
-                ==> (#[trigger] final(owner).children()[j]) == old(owner).children()[j],
-            marked_borrowed_slots(*final(owner), start, end),
+            0 <= j < start || end <= j < NR_ENTRIES ==> (#[trigger] final(owner).children()[j])
+                == old(owner).children()[j],
+        marked_borrowed_slots(*final(owner), start, end),
 {
     mark_borrowed_children_at(owner, start, end, start);
 }
@@ -1534,8 +1537,8 @@ impl<C: PageTableConfig> PageTableOwner<C> {
     ///
     /// `count_consistent` ties `nr_children` to the present count over the
     /// config window (the whole array below the top level), so a present
-    /// managed PTE would force `nr_children >= 1`
-    /// ([`Self::lemma_count_present_upto_present`] /
+    /// managed PTE would force `nr_children >= 1` (the `node::owners`
+    /// lemmas `lemma_count_present_upto_present` /
     /// `lemma_count_present_window_present`). `pt_edge_at` (from `pt_inv`)
     /// then forces each managed ghost child `is_absent` — its `view_rec` is
     /// `∅`. Out-of-window slots only exist at the top level; the
@@ -1551,14 +1554,12 @@ impl<C: PageTableConfig> PageTableOwner<C> {
             self.0.value().node().count_consistent(),
             path.len() <= INC_LEVELS - 1,
             path.len() == self.0.level(),
-            self.0.value().node().level() < NR_LEVELS
-                || (forall|k: int|
-                    #![trigger self.0.children()[k]]
-                    0 <= k < NR_ENTRIES
-                        && !(C::TOP_LEVEL_INDEX_RANGE().start <= k
-                            < C::TOP_LEVEL_INDEX_RANGE().end) && self.0.children()[k] is Some
-                        ==> (self.0.children()[k]->0).value().is_borrowed()
-                            || (self.0.children()[k]->0).value().is_absent()),
+            self.0.value().node().level() < NR_LEVELS || (forall|k: int|
+                #![trigger self.0.children()[k]]
+                0 <= k < NR_ENTRIES && !(C::TOP_LEVEL_INDEX_RANGE().start <= k
+                    < C::TOP_LEVEL_INDEX_RANGE().end) && self.0.children()[k] is Some ==> (
+                self.0.children()[k]->0).value().is_borrowed() || (
+                self.0.children()[k]->0).value().is_absent()),
         ensures
             self.view_rec(path) == set![],
     {
@@ -1578,9 +1579,8 @@ impl<C: PageTableConfig> PageTableOwner<C> {
                     ).contains(m);
                 self.pt_inv_unroll(i);
                 let child = self.0.children()[i]->0;
-                let in_window = node_level < NR_LEVELS
-                    || (C::TOP_LEVEL_INDEX_RANGE().start <= i
-                        < C::TOP_LEVEL_INDEX_RANGE().end);
+                let in_window = node_level < NR_LEVELS || (C::TOP_LEVEL_INDEX_RANGE().start <= i
+                    < C::TOP_LEVEL_INDEX_RANGE().end);
                 if !in_window {
                     // Out-of-window top-level slot: the ghost child is
                     // `borrowed` (or absent) — either way `view_rec` takes
@@ -1593,6 +1593,7 @@ impl<C: PageTableConfig> PageTableOwner<C> {
                     if node_level == NR_LEVELS {
                         if cp[i].is_present() {
                             crate::specs::mm::page_table::node::owners::lemma_count_present_window_present(
+
                                 cp,
                                 C::TOP_LEVEL_INDEX_RANGE().start as int,
                                 C::TOP_LEVEL_INDEX_RANGE().end as int,
@@ -1604,10 +1605,7 @@ impl<C: PageTableConfig> PageTableOwner<C> {
                         // `count_consistent` is global below the top level.
                         if cp[i].is_present() {
                             crate::specs::mm::page_table::node::owners::lemma_count_present_upto_present(
-                                cp,
-                                cp.len() as int,
-                                i,
-                            );
+                            cp, cp.len() as int, i);
                             assert(false);
                         }
                     }

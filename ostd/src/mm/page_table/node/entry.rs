@@ -12,6 +12,7 @@ use crate::specs::{
         },
         page_table::{
             INC_LEVELS, PageTableOwner, cursor::page_size_lemmas::lemma_split_sub_page_big_j,
+            node::owners::in_count_window,
         },
     },
     task::InAtomicMode,
@@ -285,12 +286,7 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
             old(self).node_matching(*old(owner), *old(parent_owner), *old(self).node),
             old(self).new_owner_compatible(new_child, *old(owner), *old(new_owner), *old(regions)),
             old(parent_owner).metaregion_sound_node(*old(regions)),
-            // Windowed top-level counting: the install must touch the
-            // config's managed window (out-of-window slots belong to
-            // the shared half and are never swapped).
-            old(parent_owner).level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= old(self).idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(old(parent_owner).level(), old(self).idx as int),
         ensures
             final(self).invariants(*final(new_owner), *final(regions)),
             res.invariants(*final(owner), *final(regions)),
@@ -488,14 +484,15 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
                 };
             };
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
                 cp0,
                 self.idx as int,
                 new_pte,
-            );        }
+            );
+        }
 
         old_child
     }
@@ -533,12 +530,7 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
             // `final(owner).inv()`'s `child.level == self.level + 1`.
             old(owner).level() + old(parent_owner).level() == INC_LEVELS,
             old(parent_owner).metaregion_sound_node(*old(regions)),
-            // Windowed top-level counting: the install must touch the
-            // config's managed window (out-of-window slots belong to
-            // the shared half and are never swapped).
-            old(parent_owner).level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= old(self).idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(old(parent_owner).level(), old(self).idx as int),
         ensures
             final(self).invariants(final(owner).value(), *final(regions)),
             final(self).parent_perms_preserved(*old(parent_owner), *final(parent_owner)),
@@ -763,7 +755,9 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
                 // went absent → present (the new PT node) and `nr_children` was
                 // incremented by 1.
                 assert(parent_owner.level() == old(parent_owner).level());
-                                crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+                crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<
+                    C,
+                >(
                     parent_owner.level(),
                     old(parent_owner).meta_own.nr_children.value() as int,
                     parent_owner.meta_own.nr_children.value() as int,
@@ -1388,7 +1382,9 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
                 assert forall|j: int| 0 <= j < i implies #[trigger] new_owner_before_update.child(
                     j,
                 ).value().metaregion_sound(*regions) by {
-                    new_owner_before_update.child(j).value().lemma_metaregion_sound_frame_paths_changed(
+                    new_owner_before_update.child(
+                        j,
+                    ).value().lemma_metaregion_sound_frame_paths_changed(
                         regions_before_path_insert,
                         *regions,
                     );
@@ -1539,14 +1535,15 @@ impl<'a, 'rcu, C: PageTableConfig> Entry<'a, 'rcu, C> {
         let ghost regions_before_registration = *regions;
         proof {
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
                 old(parent_owner).children_perm.value(),
                 self.idx as int,
                 self.pte,
-            );            assert(parent_owner.count_consistent());
+            );
+            assert(parent_owner.count_consistent());
             let tracked new_slot = regions.tracked_borrow_mut_slot_owner(
                 owner.value().meta_slot_paddr().unwrap(),
             );
@@ -1786,14 +1783,15 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
             // present-count is unchanged by the `write_pte` update — preserving
             // `count_consistent` for the caller.
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
                 cp_old,
                 idx as int,
                 pte,
-            );        }
+            );
+        }
 
         pte
     }
@@ -1825,12 +1823,7 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
                 &&& old(regions).slot_owner(old(new_owner).meta_slot_paddr()->0).ref_count() != REF_COUNT_UNUSED
             },
             old(parent_owner).metaregion_sound_node(*old(regions)),
-            // Windowed top-level counting: the install must touch the
-            // config's managed window (out-of-window slots belong to
-            // the shared half and are never swapped).
-            old(parent_owner).level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(old(parent_owner).level(), idx as int),
         ensures
             res.invariants(*final(owner), *final(regions)),
             final(new_owner).inv(),
@@ -1966,7 +1959,7 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
 
         proof {
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
@@ -2069,12 +2062,7 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
             old(owner).level() + old(parent_owner).level() == INC_LEVELS,
             old(parent_owner).metaregion_sound_node(*old(regions)),
             idx < NR_ENTRIES,
-            // Windowed top-level counting: the install must touch the
-            // config's managed window (out-of-window slots belong to
-            // the shared half and are never swapped).
-            old(parent_owner).level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(old(parent_owner).level(), idx as int),
             old(owner).value().match_pte(
                 old(parent_owner).children_perm.value()[idx as int],
                 old(owner).value().parent_level,
@@ -2272,14 +2260,15 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
             // incremented by 1, so the (windowed at the top level)
             // present count rises by 1 in lockstep.
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
                 cp0,
                 idx as int,
                 new_pte,
-            );        }
+            );
+        }
 
         proof {
             {
@@ -2372,12 +2361,7 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
             old(regions).slots.contains_key(old(parent_owner).slot_index),
             old(parent_owner).metaregion_sound_node(*old(regions)),
             Child::<C>::Frame(paddr, level, prop).invariants(*old(new_owner), *old(regions)),
-            // Windowed top-level counting: the install must touch the
-            // config's managed window (out-of-window slots belong to
-            // the shared half and are never swapped).
-            old(parent_owner).level() < NR_LEVELS
-                || C::TOP_LEVEL_INDEX_RANGE().start <= idx
-                    < C::TOP_LEVEL_INDEX_RANGE().end,
+            in_count_window::<C>(old(parent_owner).level(), idx as int),
             old(owner).path == old(new_owner).path,
             old(owner).parent_level == old(new_owner).parent_level,
         ensures
@@ -2437,14 +2421,15 @@ impl<'rcu, C: PageTableConfig> PageTableGuard<'rcu, C> {
             // absent → present (the new frame) and `nr_children` was
             // incremented by 1.
             assert(parent_owner.level() == old(parent_owner).level());
-                        crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
+            crate::specs::mm::page_table::node::owners::lemma_count_consistent_after_update::<C>(
                 parent_owner.level(),
                 old(parent_owner).meta_own.nr_children.value() as int,
                 parent_owner.meta_own.nr_children.value() as int,
                 cp0,
                 idx as int,
                 new_pte,
-            );        }
+            );
+        }
     }
 }
 
