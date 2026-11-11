@@ -1,0 +1,124 @@
+name: Spec Check (nightly)
+
+# Nightly spec-check station (spec-check roadmap M4, vostd first site).
+# Runs the same entry script a local run uses —
+# spec-check: examples/ci/run-spec-check.sh — inside the vostd nix
+# devshell: build cargo-spec-check, capture the vostd contract surface,
+# run the registered analyses, upload the reports.
+#
+# By contract (ANALYSIS-CONTRACT v1) findings never fail the run: the
+# check command exits non-zero only on pipeline errors (config, capture,
+# tool, unknown analysis).
+
+on:
+  schedule:
+    # Nightly. Adjust the time when the station goes live.
+    - cron: "40 2 * * *"
+  workflow_dispatch:
+    inputs:
+      spec-check-repo:
+        description: >-
+          spec-check repository (owner/name). PLACEHOLDER until the
+          spec-check repo has a remote — replace the default below.
+        required: false
+        default: "OWNER/spec-check"
+      spec-check-ref:
+        description: "spec-check ref to check out (branch, tag, or rev)"
+        required: false
+        default: "main"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-check-${{ github.event.schedule || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  spec-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      VOSTD_DIR: ${{ github.workspace }}
+      SPEC_CHECK_DIR: ${{ github.workspace }}/spec-check
+      CHECK_OUT: ${{ github.workspace }}/spec-check-report
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          submodules: recursive
+
+      - name: Set up toolchain and caches
+        uses: ./.github/actions/setup-verus
+        with:
+          verus: 'true'
+          install-verusfmt: 'false'
+
+      - name: Checkout spec-check
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs['spec-check-repo'] || 'OWNER/spec-check' }}
+          ref: ${{ inputs['spec-check-ref'] || 'main' }}
+          path: spec-check
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Run spec-check
+        run: |
+          echo "vostd: $VOSTD_DIR"
+          echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
+          echo "artifact dir: $CHECK_OUT"
+          "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh"
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [[ -f "$CHECK_OUT/check/report.json" ]]; then
+            python3 - "$CHECK_OUT/check/report.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+
+          report = json.load(open(sys.argv[1]))
+          capture = report["capture"]
+          summary = report["summary"]
+          print("## Spec check (nightly)")
+          print()
+          print(f"- spec-check CONFIG: `{report['project_config']}`")
+          stale = capture["recaptured_stale_reason"]
+          capture_state = "reused fresh capture" if capture["reused"] else "ran project-capture"
+          if stale:
+              capture_state += f" (stale: {stale})"
+          print(f"- capture: {capture_state}")
+          print(f"- analyses: {summary['analyses']}")
+          verdicts = summary["verdicts"]
+          if verdicts:
+              totals = ", ".join(f"{name}={count}" for name, count in verdicts.items())
+              print(f"- verdict totals: {totals}")
+          else:
+              print("- verdict totals: none")
+          print("- report artifact: `spec-check-report`")
+          PY
+          else
+            {
+              echo "## Spec check (nightly)"
+              echo
+              echo "- ❌ no report.json produced; see the run log"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spec-check-report
+          path: ${{ env.CHECK_OUT }}/
+          retention-days: 7
+          if-no-files-found: warn
