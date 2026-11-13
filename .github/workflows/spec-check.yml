@@ -111,9 +111,8 @@ jobs:
           done
           if [[ $status -ne 0 ]]; then
             echo "::error::run-spec-check exited $status"
-            tail -n 80 /tmp/spec-check-run.log | sed 's/^/::error::/'
             if [[ -f "$CHECK_OUT/capture/report.json" ]]; then
-              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' || true
+              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' | head -5 || true
           import json, sys
           d = json.load(open(sys.argv[1]))
           print("capture status:", d.get("status"))
@@ -121,9 +120,12 @@ jobs:
               print("profile", p.get("profile"), "build_success", p.get("build_success"))
               for u in p.get("units", []):
                   if u.get("error"):
-                      print("unit error:", str(u["error"])[:400])
+                      print("unit error:", str(u["error"])[:500])
           PY
             fi
+            echo "::error::rustc: $(rustc -V 2>&1 || true)"
+            echo "::error::cargo-verus: $(ls -l "$VOSTD_DIR/tools/verus/source/target-verus/release/cargo-verus" 2>&1 || true)"
+            tail -n 10 /tmp/spec-check-run.log | sed 's/^/::error::/'
             exit $status
           fi
 
