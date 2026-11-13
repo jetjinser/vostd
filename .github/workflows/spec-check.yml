@@ -78,10 +78,9 @@ jobs:
           ref: ${{ inputs['spec-check-ref'] || '0953178502c593374e94fc9fe787f98ada8c3c77' }}
           path: spec-check
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v23
-
       - name: Run spec-check
+        env:
+          SPEC_CHECK_NO_NIX: '1'
         run: |
           echo "vostd: $VOSTD_DIR"
           echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
