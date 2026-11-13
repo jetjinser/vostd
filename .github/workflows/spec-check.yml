@@ -196,10 +196,14 @@ jobs:
           print("capture status:", d.get("status"))
           for p in d.get("profiles", []):
               print("profile", p.get("profile"), "build_success", p.get("build_success"),
-                    "kind", p.get("build_failure_kind"), "exit", p.get("build_exit_code"))
+                    "kind", p.get("build_failure_kind"), "exit", p.get("build_exit_code"),
+                    "registry_correspondence", p.get("registry_correspondence"))
               obs = p.get("build_obstacles") or []
               for o in list(obs)[:4]:
                   print("obstacle:", str(o)[:240])
+              for u in p.get("units", []):
+                  print("unit", u.get("status"), "error", u.get("error"),
+                        "expected", u.get("expected"), "evidence", u.get("evidence"))
               for key in ("build_stdout", "evidence"):
                   path = p.get(key)
                   if not path or not os.path.exists(path):
