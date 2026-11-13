@@ -10,6 +10,7 @@ name: Spec Check (nightly)
 #
 # Findings never fail the run (ANALYSIS-CONTRACT v1); the check exits non-zero
 # only on pipeline errors (config, capture, tool, unknown analysis).
+# The capture step ignores rustup/cargo proxy variables (CARGO_HOME, RUSTUP_*).
 
 on:
   push:
