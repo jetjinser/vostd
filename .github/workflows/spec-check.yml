@@ -214,6 +214,15 @@ jobs:
                           if "error" in l.lower() or "cannot" in l.lower()]
                   for l in errs[:6]:
                       print(key, "line:", l[:300])
+              cap = os.path.dirname(sys.argv[1])
+              unit_dir = os.path.join(cap, p.get("profile", ""), "unit-0")
+              for fname in ("probe-build.stderr", "probe-build.stdout", "compiler-rule.json"):
+                  path = os.path.join(unit_dir, fname)
+                  if not os.path.exists(path):
+                      continue
+                  lines = [l.strip() for l in open(path, errors="replace")]
+                  for l in lines[:8]:
+                      print(fname, "line:", l[:300])
           PY
             fi
             echo "::error::rustc: $(rustc -V 2>&1 || true)"
