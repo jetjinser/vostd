@@ -150,14 +150,23 @@ jobs:
             echo "::error::run-spec-check exited $status"
             if [[ -f "$CHECK_OUT/capture/report.json" ]]; then
               python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' | head -5 || true
-          import json, sys
+          import json, os, sys
           d = json.load(open(sys.argv[1]))
           print("capture status:", d.get("status"))
           for p in d.get("profiles", []):
-              print("profile", p.get("profile"), "build_success", p.get("build_success"))
-              for u in p.get("units", []):
-                  if u.get("error"):
-                      print("unit error:", str(u["error"])[:500])
+              print("profile", p.get("profile"), "build_success", p.get("build_success"),
+                    "kind", p.get("build_failure_kind"), "exit", p.get("build_exit_code"))
+              obs = p.get("build_obstacles") or []
+              for o in list(obs)[:4]:
+                  print("obstacle:", str(o)[:240])
+              for key in ("build_stdout", "evidence"):
+                  path = p.get(key)
+                  if not path or not os.path.exists(path):
+                      continue
+                  errs = [l.strip() for l in open(path, errors="replace")
+                          if "error" in l.lower() or "cannot" in l.lower()]
+                  for l in errs[:6]:
+                      print(key, "line:", l[:300])
           PY
             fi
             echo "::error::rustc: $(rustc -V 2>&1 || true)"
