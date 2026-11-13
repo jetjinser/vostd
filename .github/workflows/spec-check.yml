@@ -84,6 +84,14 @@ jobs:
           echo "CHECK_OUT=$CHECK_OUT" >> "$GITHUB_ENV"
           echo "artifact dir: $CHECK_OUT"
 
+      - name: Install Rust toolchain and target
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,llvm-tools,rust-src
+          rustup target add x86_64-unknown-none --toolchain 1.98.1
+          rustup default 1.98.1
+          rustc -Vv
+          rustup target list --installed
+
       - name: Run spec-check
         env:
           SPEC_CHECK_NO_NIX: '1'
@@ -104,6 +112,18 @@ jobs:
           if [[ $status -ne 0 ]]; then
             echo "::error::run-spec-check exited $status"
             tail -n 80 /tmp/spec-check-run.log | sed 's/^/::error::/'
+            if [[ -f "$CHECK_OUT/capture/report.json" ]]; then
+              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' || true
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          print("capture status:", d.get("status"))
+          for p in d.get("profiles", []):
+              print("profile", p.get("profile"), "build_success", p.get("build_success"))
+              for u in p.get("units", []):
+                  if u.get("error"):
+                      print("unit error:", str(u["error"])[:400])
+          PY
+            fi
             exit $status
           fi
 
