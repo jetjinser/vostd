@@ -57,7 +57,13 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
-          submodules: recursive
+          submodules: false
+
+      - name: Prepare dv submodule (public main)
+        run: |
+          rm -rf dv
+          git clone --depth 1 https://github.com/asterinas/rust-deductive-verifier.git dv
+          git -C dv log --oneline -1
 
       - name: Set up toolchain and caches
         uses: ./.github/actions/setup-verus
