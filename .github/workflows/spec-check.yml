@@ -67,8 +67,33 @@ jobs:
       - name: Set up toolchain and caches
         uses: ./.github/actions/setup-verus
         with:
-          verus: 'true'
+          verus: 'false'
           install-verusfmt: 'false'
+
+      - name: Cache pinned Verus
+        uses: actions/cache@v6
+        with:
+          path: |
+            tools/verus
+            !tools/verus/.git
+            !tools/verus/.git/**
+            !tools/verus/source/target
+            !tools/verus/source/target/**
+          key: ${{ runner.os }}-verus-pinned-d128dda
+
+      - name: Bootstrap pinned Verus
+        run: |
+          PIN=d128dda371ca4b19faa8b9b6e31425891ca9eadf
+          if [[ -x tools/verus/source/target-verus/release/cargo-verus && -f tools/verus/source/z3 ]]; then
+            echo "Using cached pinned Verus"
+            exit 0
+          fi
+          rm -rf tools/verus
+          git init -q tools/verus
+          git -C tools/verus remote add origin https://github.com/asterinas/verus.git
+          git -C tools/verus fetch --depth 1 origin "$PIN"
+          git -C tools/verus checkout -q FETCH_HEAD
+          cargo dv bootstrap
 
       - name: Checkout spec-check
         uses: actions/checkout@v7
