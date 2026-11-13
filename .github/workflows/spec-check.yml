@@ -51,7 +51,6 @@ jobs:
     env:
       VOSTD_DIR: ${{ github.workspace }}
       SPEC_CHECK_DIR: ${{ github.workspace }}/spec-check
-      CHECK_OUT: ${{ runner.temp }}/spec-check-report
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -77,6 +76,13 @@ jobs:
           repository: ${{ inputs['spec-check-repo'] || 'jetjinser/spec-check' }}
           ref: ${{ inputs['spec-check-ref'] || '0953178502c593374e94fc9fe787f98ada8c3c77' }}
           path: spec-check
+
+      - name: Prepare output directory
+        run: |
+          CHECK_OUT="$RUNNER_TEMP/spec-check-report"
+          mkdir -p "$CHECK_OUT"
+          echo "CHECK_OUT=$CHECK_OUT" >> "$GITHUB_ENV"
+          echo "artifact dir: $CHECK_OUT"
 
       - name: Run spec-check
         env:
@@ -141,6 +147,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: spec-check-report
-          path: ${{ env.CHECK_OUT }}/
+          path: ${{ runner.temp }}/spec-check-report/
           retention-days: 7
           if-no-files-found: warn
