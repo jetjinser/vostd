@@ -1,17 +1,15 @@
 name: Spec Check (nightly)
 
 # Nightly spec-check station: checks the current upstream vostd tree with
-# spec-check, using the project's own Verus toolchain (setup-verus).  This is
-# the "current project quality" station, not a frozen research snapshot.
+# spec-check, using the project's own toolchain and a Verus build cached by
+# toolchain version.  This is the "current project quality" station, not a
+# frozen research snapshot.
 #
 # The same entry script runs locally and in CI:
 #   spec-check/examples/ci/run-spec-check.sh
 #
 # Findings never fail the run (ANALYSIS-CONTRACT v1); the check exits non-zero
 # only on pipeline errors (config, capture, tool, unknown analysis).
-#
-# First stage: capture + vacuity over the check-smoke inputs.  Once green,
-# replace the smoke inputs with vostd-specific manifests.
 
 on:
   push:
@@ -67,11 +65,54 @@ jobs:
           ref: ${{ inputs['vostd-ref'] || 'main' }}
           submodules: recursive
 
-      - name: Set up toolchain and caches
-        uses: ./.github/actions/setup-verus
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential unzip pkg-config libssl-dev llvm
+
+      - name: Install project toolchain and target
+        id: rust
+        run: |
+          RUST_VERSION=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml | head -1)
+          echo "version=$RUST_VERSION" >> "$GITHUB_OUTPUT"
+          rustup toolchain install "$RUST_VERSION" --profile minimal \
+            --component rustc-dev,llvm-tools,rust-src
+          rustup target add x86_64-unknown-none --toolchain "$RUST_VERSION"
+          rustup default "$RUST_VERSION"
+          rustc -Vv
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
         with:
-          verus: 'true'
-          install-verusfmt: 'false'
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Verus
+        uses: actions/cache@v6
+        with:
+          path: |
+            tools/verus
+            !tools/verus/.git
+            !tools/verus/.git/**
+            !tools/verus/source/target
+            !tools/verus/source/target/**
+          key: ${{ runner.os }}-verus-${{ steps.rust.outputs.version }}-v2
+
+      - name: Bootstrap Verus (if missing or stale)
+        run: |
+          VERUS_BIN=tools/verus/source/target-verus/release/verus
+          if [[ -x "$VERUS_BIN" ]] && "$VERUS_BIN" --version >/dev/null 2>&1; then
+            echo "Using cached Verus"
+          else
+            echo "Verus missing or stale; bootstrapping with $RUST_VERSION"
+            rm -rf tools/verus
+            cargo dv bootstrap
+            "$VERUS_BIN" --version
+          fi
 
       - name: Checkout spec-check
         uses: actions/checkout@v7
@@ -86,17 +127,6 @@ jobs:
           mkdir -p "$CHECK_OUT"
           echo "CHECK_OUT=$CHECK_OUT" >> "$GITHUB_ENV"
           echo "artifact dir: $CHECK_OUT"
-
-      - name: Install project toolchain and target
-        working-directory: ${{ env.VOSTD_DIR }}
-        run: |
-          RUST_VERSION=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml | head -1)
-          rustup toolchain install "$RUST_VERSION" --profile minimal \
-            --component rustc-dev,llvm-tools,rust-src
-          rustup target add x86_64-unknown-none --toolchain "$RUST_VERSION"
-          rustup default "$RUST_VERSION"
-          rustc -Vv
-          rustup target list --installed
 
       - name: Prepare smoke inputs
         run: |
@@ -149,7 +179,7 @@ jobs:
           if [[ $status -ne 0 ]]; then
             echo "::error::run-spec-check exited $status"
             if [[ -f "$CHECK_OUT/capture/report.json" ]]; then
-              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' | head -5 || true
+              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' | head -8 || true
           import json, os, sys
           d = json.load(open(sys.argv[1]))
           print("capture status:", d.get("status"))
