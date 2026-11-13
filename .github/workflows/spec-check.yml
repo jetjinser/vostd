@@ -51,7 +51,7 @@ jobs:
     env:
       VOSTD_DIR: ${{ github.workspace }}
       SPEC_CHECK_DIR: ${{ github.workspace }}/spec-check
-      CHECK_OUT: ${{ github.workspace }}/spec-check-report
+      CHECK_OUT: ${{ runner.temp }}/spec-check-report
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
