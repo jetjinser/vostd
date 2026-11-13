@@ -98,12 +98,40 @@ jobs:
           rustc -Vv
           rustup target list --installed
 
+      - name: Prepare smoke inputs
+        run: |
+          SMOKE="$CHECK_OUT/smoke"
+          rm -rf "$SMOKE"
+          mkdir -p "$SMOKE/crate"
+          cp -r "$SPEC_CHECK_DIR/examples/check-smoke/crate/src" "$SMOKE/crate/src"
+          cat > "$SMOKE/crate/Cargo.toml" <<EOF
+          [package]
+          name = "check-smoke-crate"
+          version = "0.1.0"
+          edition = "2021"
+          publish = false
+
+          [dependencies]
+          vstd = { path = "$VOSTD_DIR/tools/verus/source/vstd" }
+
+          [workspace]
+
+          [package.metadata.verus]
+          verify = true
+          EOF
+          cat > "$SMOKE/capture.json" <<'EOF'
+          {"profiles":[{"name":"smoke-lib","package":"check-smoke-crate","target":"x86_64-unknown-linux-gnu","tests":false,"features":[],"default_features":true}]}
+          EOF
+          cp "$SPEC_CHECK_DIR/examples/check-smoke/manifest.json" "$SMOKE/manifest.json"
+          {
+            echo "CAPTURE_CONFIG=$SMOKE/capture.json"
+            echo "CAPTURE_MANIFEST=$SMOKE/crate/Cargo.toml"
+            echo "ANALYSIS_MANIFEST=$SMOKE/manifest.json"
+          } >> "$GITHUB_ENV"
+
       - name: Run spec-check
         env:
           SPEC_CHECK_NO_NIX: '1'
-          CAPTURE_CONFIG: ${{ github.workspace }}/spec-check/examples/check-smoke/capture.json
-          CAPTURE_MANIFEST: ${{ github.workspace }}/spec-check/examples/check-smoke/crate/Cargo.toml
-          ANALYSIS_MANIFEST: ${{ github.workspace }}/spec-check/examples/check-smoke/manifest.json
         run: |
           echo "vostd: $VOSTD_DIR"
           echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
