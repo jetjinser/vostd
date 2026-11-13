@@ -86,7 +86,15 @@ jobs:
           echo "vostd: $VOSTD_DIR"
           echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
           echo "artifact dir: $CHECK_OUT"
-          "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh"
+          set +e
+          set -o pipefail
+          "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh" 2>&1 | tee /tmp/spec-check-run.log
+          status=$?
+          if [[ $status -ne 0 ]]; then
+            echo "::error::run-spec-check exited $status"
+            tail -n 40 /tmp/spec-check-run.log | sed 's/^/::error::/'
+            exit $status
+          fi
 
       - name: Publish summary
         if: always()
