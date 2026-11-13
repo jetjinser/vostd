@@ -11,6 +11,9 @@ name: Spec Check (nightly)
 # tool, unknown analysis).
 
 on:
+  push:
+    branches:
+      - experiment/high-level-spec-checker
   schedule:
     # Nightly. Adjust the time when the station goes live.
     - cron: "40 2 * * *"
@@ -21,11 +24,11 @@ on:
           spec-check repository (owner/name). PLACEHOLDER until the
           spec-check repo has a remote — replace the default below.
         required: false
-        default: "OWNER/spec-check"
+        default: "jetjinser/spec-check"
       spec-check-ref:
         description: "spec-check ref to check out (branch, tag, or rev)"
         required: false
-        default: "main"
+        default: "70f0249"
 
 permissions:
   contents: read
@@ -65,8 +68,8 @@ jobs:
       - name: Checkout spec-check
         uses: actions/checkout@v7
         with:
-          repository: ${{ inputs['spec-check-repo'] || 'OWNER/spec-check' }}
-          ref: ${{ inputs['spec-check-ref'] || 'main' }}
+          repository: ${{ inputs['spec-check-repo'] || 'jetjinser/spec-check' }}
+          ref: ${{ inputs['spec-check-ref'] || '70f0249' }}
           path: spec-check
 
       - name: Install Nix
