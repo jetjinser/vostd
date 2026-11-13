@@ -88,11 +88,17 @@ jobs:
           echo "artifact dir: $CHECK_OUT"
           set +e
           set -o pipefail
-          "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh" 2>&1 | tee /tmp/spec-check-run.log
-          status=$?
+          status=1
+          for attempt in 1 2; do
+            "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh" 2>&1 | tee /tmp/spec-check-run.log
+            status=${PIPESTATUS[0]}
+            [[ $status -eq 0 ]] && break
+            echo "::warning::run-spec-check attempt $attempt exited $status"
+            sleep 10
+          done
           if [[ $status -ne 0 ]]; then
             echo "::error::run-spec-check exited $status"
-            tail -n 40 /tmp/spec-check-run.log | sed 's/^/::error::/'
+            tail -n 80 /tmp/spec-check-run.log | sed 's/^/::error::/'
             exit $status
           fi
 
