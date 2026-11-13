@@ -1,34 +1,42 @@
 name: Spec Check (nightly)
 
-# Nightly spec-check station (spec-check roadmap M4, vostd first site).
-# Runs the same entry script a local run uses —
-# spec-check: examples/ci/run-spec-check.sh — inside the vostd nix
-# devshell: build cargo-spec-check, capture the vostd contract surface,
-# run the registered analyses, upload the reports.
+# Nightly spec-check station: checks the current upstream vostd tree with
+# spec-check, using the project's own Verus toolchain (setup-verus).  This is
+# the "current project quality" station, not a frozen research snapshot.
 #
-# By contract (ANALYSIS-CONTRACT v1) findings never fail the run: the
-# check command exits non-zero only on pipeline errors (config, capture,
-# tool, unknown analysis).
+# The same entry script runs locally and in CI:
+#   spec-check/examples/ci/run-spec-check.sh
+#
+# Findings never fail the run (ANALYSIS-CONTRACT v1); the check exits non-zero
+# only on pipeline errors (config, capture, tool, unknown analysis).
+#
+# First stage: capture + vacuity over the check-smoke inputs.  Once green,
+# replace the smoke inputs with vostd-specific manifests.
 
 on:
   push:
     branches:
       - experiment/high-level-spec-checker
   schedule:
-    # Nightly. Adjust the time when the station goes live.
     - cron: "40 2 * * *"
   workflow_dispatch:
     inputs:
+      vostd-repository:
+        description: "vostd repository to check (owner/name)"
+        required: false
+        default: "asterinas/vostd"
+      vostd-ref:
+        description: "vostd ref to check"
+        required: false
+        default: "main"
       spec-check-repo:
-        description: >-
-          spec-check repository (owner/name). PLACEHOLDER until the
-          spec-check repo has a remote — replace the default below.
+        description: "spec-check repository (owner/name)"
         required: false
         default: "jetjinser/spec-check"
       spec-check-ref:
-        description: "spec-check ref to check out (branch, tag, or rev)"
+        description: "spec-check ref to check out"
         required: false
-        default: "0953178502c593374e94fc9fe787f98ada8c3c77"
+        default: "master"
 
 permissions:
   contents: read
@@ -52,54 +60,24 @@ jobs:
       VOSTD_DIR: ${{ github.workspace }}
       SPEC_CHECK_DIR: ${{ github.workspace }}/spec-check
     steps:
-      - name: Checkout repository
+      - name: Checkout vostd
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
-          submodules: false
-
-      - name: Prepare dv submodule (public main)
-        run: |
-          rm -rf dv
-          git clone --depth 1 https://github.com/asterinas/rust-deductive-verifier.git dv
-          git -C dv log --oneline -1
+          repository: ${{ inputs['vostd-repository'] || 'asterinas/vostd' }}
+          ref: ${{ inputs['vostd-ref'] || 'main' }}
+          submodules: recursive
 
       - name: Set up toolchain and caches
         uses: ./.github/actions/setup-verus
         with:
-          verus: 'false'
+          verus: 'true'
           install-verusfmt: 'false'
-
-      - name: Cache pinned Verus
-        uses: actions/cache@v6
-        with:
-          path: |
-            tools/verus
-            !tools/verus/.git
-            !tools/verus/.git/**
-            !tools/verus/source/target
-            !tools/verus/source/target/**
-          key: ${{ runner.os }}-verus-pinned-d128dda
-
-      - name: Bootstrap pinned Verus
-        run: |
-          PIN=d128dda371ca4b19faa8b9b6e31425891ca9eadf
-          if [[ -x tools/verus/source/target-verus/release/cargo-verus && -f tools/verus/source/z3 ]]; then
-            echo "Using cached pinned Verus"
-            exit 0
-          fi
-          rm -rf tools/verus
-          git init -q tools/verus
-          git -C tools/verus remote add origin https://github.com/asterinas/verus.git
-          git -C tools/verus fetch --depth 1 origin "$PIN"
-          git -C tools/verus checkout -q FETCH_HEAD
-          cargo dv bootstrap
 
       - name: Checkout spec-check
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs['spec-check-repo'] || 'jetjinser/spec-check' }}
-          ref: ${{ inputs['spec-check-ref'] || '0953178502c593374e94fc9fe787f98ada8c3c77' }}
+          ref: ${{ inputs['spec-check-ref'] || 'master' }}
           path: spec-check
 
       - name: Prepare output directory
@@ -109,17 +87,23 @@ jobs:
           echo "CHECK_OUT=$CHECK_OUT" >> "$GITHUB_ENV"
           echo "artifact dir: $CHECK_OUT"
 
-      - name: Install Rust toolchain and target
+      - name: Install project toolchain and target
+        working-directory: ${{ env.VOSTD_DIR }}
         run: |
-          rustup toolchain install 1.98.1 --profile minimal --component rustc-dev,llvm-tools,rust-src
-          rustup target add x86_64-unknown-none --toolchain 1.98.1
-          rustup default 1.98.1
+          RUST_VERSION=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml | head -1)
+          rustup toolchain install "$RUST_VERSION" --profile minimal \
+            --component rustc-dev,llvm-tools,rust-src
+          rustup target add x86_64-unknown-none --toolchain "$RUST_VERSION"
+          rustup default "$RUST_VERSION"
           rustc -Vv
           rustup target list --installed
 
       - name: Run spec-check
         env:
           SPEC_CHECK_NO_NIX: '1'
+          CAPTURE_CONFIG: ${{ github.workspace }}/spec-check/examples/check-smoke/capture.json
+          CAPTURE_MANIFEST: ${{ github.workspace }}/spec-check/examples/check-smoke/crate/Cargo.toml
+          ANALYSIS_MANIFEST: ${{ github.workspace }}/spec-check/examples/check-smoke/manifest.json
         run: |
           echo "vostd: $VOSTD_DIR"
           echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
