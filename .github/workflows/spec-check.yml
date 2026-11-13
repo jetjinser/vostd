@@ -114,6 +114,17 @@ jobs:
             "$VERUS_BIN" --version
           fi
 
+      - name: Ensure rustc shared libraries
+        run: |
+          for tc in $(rustup toolchain list | awk '{print $1}'); do
+            rustup component add rustc-dev llvm-tools rust-src --toolchain "$tc" >/dev/null 2>&1 || true
+          done
+          LIBS="$(find "$HOME/.rustup/toolchains" -maxdepth 3 -type d -name lib | paste -sd:)"
+          echo "LD_LIBRARY_PATH=$LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "librustc_driver libraries found:"
+          find "$HOME/.rustup/toolchains" -name 'librustc_driver-*.so' | head
+          "$VOSTD_DIR/tools/verus/source/target-verus/release/verus" --version
+
       - name: Checkout spec-check
         uses: actions/checkout@v7
         with:
