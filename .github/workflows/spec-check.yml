@@ -44,7 +44,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
   VERUS_PIN: d128dda371ca4b19faa8b9b6e31425891ca9eadf
 
 defaults:
