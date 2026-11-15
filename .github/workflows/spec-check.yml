@@ -1,16 +1,15 @@
 name: Spec Check (nightly)
 
-# Nightly spec-check station: checks the current upstream vostd tree with
-# spec-check, using the project's own toolchain and a Verus build cached by
-# toolchain version.  This is the "current project quality" station, not a
-# frozen research snapshot.
+# Nightly spec-check station.
 #
-# The same entry script runs locally and in CI:
-#   spec-check/examples/ci/run-spec-check.sh
+# The tool is coupled to rustc-private APIs (MIR probe) and currently supports
+# Verus d128dda / rustc 1.98.1.  This station therefore checks a vostd revision
+# built with that toolchain (fork branch borrowed-repr = 43da079) and pins
+# Verus accordingly.  Tracking upstream main requires porting the MIR probe to
+# the newer rustc API; that is a separate work item.
 #
 # Findings never fail the run (ANALYSIS-CONTRACT v1); the check exits non-zero
 # only on pipeline errors (config, capture, tool, unknown analysis).
-# The capture step ignores rustup/cargo proxy variables (CARGO_HOME, RUSTUP_*).
 
 on:
   push:
@@ -23,11 +22,11 @@ on:
       vostd-repository:
         description: "vostd repository to check (owner/name)"
         required: false
-        default: "asterinas/vostd"
+        default: "jetjinser/vostd"
       vostd-ref:
         description: "vostd ref to check"
         required: false
-        default: "main"
+        default: "borrowed-repr"
       spec-check-repo:
         description: "spec-check repository (owner/name)"
         required: false
@@ -46,6 +45,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  VERUS_PIN: d128dda371ca4b19faa8b9b6e31425891ca9eadf
 
 defaults:
   run:
@@ -62,9 +62,15 @@ jobs:
       - name: Checkout vostd
         uses: actions/checkout@v7
         with:
-          repository: ${{ inputs['vostd-repository'] || 'asterinas/vostd' }}
-          ref: ${{ inputs['vostd-ref'] || 'main' }}
-          submodules: recursive
+          repository: ${{ inputs['vostd-repository'] || 'jetjinser/vostd' }}
+          ref: ${{ inputs['vostd-ref'] || 'borrowed-repr' }}
+          submodules: false
+
+      - name: Prepare dv submodule (public main)
+        run: |
+          rm -rf dv
+          git clone --depth 1 https://github.com/asterinas/rust-deductive-verifier.git dv
+          git -C dv log --oneline -1
 
       - name: Install system dependencies
         run: |
@@ -82,15 +88,15 @@ jobs:
           rustup default "$RUST_VERSION"
           rustc -Vv
 
-      - name: Cache cargo registry
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Ensure rustc shared libraries
+        run: |
+          for tc in $(rustup toolchain list | awk '{print $1}'); do
+            rustup component add rustc-dev llvm-tools rust-src --toolchain "$tc" >/dev/null 2>&1 || true
+          done
+          LIBS="$(find "$HOME/.rustup/toolchains" -maxdepth 3 -type d -name lib | paste -sd:)"
+          echo "LD_LIBRARY_PATH=$LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "librustc_driver libraries found:"
+          find "$HOME/.rustup/toolchains" -name 'librustc_driver-*.so' | head
 
       - name: Cache Verus
         uses: actions/cache@v6
@@ -101,30 +107,23 @@ jobs:
             !tools/verus/.git/**
             !tools/verus/source/target
             !tools/verus/source/target/**
-          key: ${{ runner.os }}-verus-${{ steps.rust.outputs.version }}-v2
+          key: ${{ runner.os }}-verus-${{ steps.rust.outputs.version }}-${{ env.VERUS_PIN }}
 
-      - name: Bootstrap Verus (if missing or stale)
+      - name: Bootstrap Verus (pinned)
         run: |
           VERUS_BIN=tools/verus/source/target-verus/release/verus
           if [[ -x "$VERUS_BIN" ]] && "$VERUS_BIN" --version >/dev/null 2>&1; then
-            echo "Using cached Verus"
+            echo "Using cached pinned Verus"
           else
-            echo "Verus missing or stale; bootstrapping with $RUST_VERSION"
+            echo "Bootstrapping Verus at $VERUS_PIN"
             rm -rf tools/verus
+            git init -q tools/verus
+            git -C tools/verus remote add origin https://github.com/asterinas/verus.git
+            git -C tools/verus fetch --depth 1 origin "$VERUS_PIN"
+            git -C tools/verus checkout -q FETCH_HEAD
             cargo dv bootstrap
             "$VERUS_BIN" --version
           fi
-
-      - name: Ensure rustc shared libraries
-        run: |
-          for tc in $(rustup toolchain list | awk '{print $1}'); do
-            rustup component add rustc-dev llvm-tools rust-src --toolchain "$tc" >/dev/null 2>&1 || true
-          done
-          LIBS="$(find "$HOME/.rustup/toolchains" -maxdepth 3 -type d -name lib | paste -sd:)"
-          echo "LD_LIBRARY_PATH=$LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          echo "librustc_driver libraries found:"
-          find "$HOME/.rustup/toolchains" -name 'librustc_driver-*.so' | head
-          "$VOSTD_DIR/tools/verus/source/target-verus/release/verus" --version
 
       - name: Checkout spec-check
         uses: actions/checkout@v7
@@ -199,29 +198,17 @@ jobs:
               print("profile", p.get("profile"), "build_success", p.get("build_success"),
                     "kind", p.get("build_failure_kind"), "exit", p.get("build_exit_code"),
                     "registry_correspondence", p.get("registry_correspondence"))
-              obs = p.get("build_obstacles") or []
-              for o in list(obs)[:4]:
-                  print("obstacle:", str(o)[:240])
               for u in p.get("units", []):
                   print("unit", u.get("status"), "variables", u.get("variables"),
                         "error", u.get("error"), "expected", u.get("expected"),
                         "evidence", u.get("evidence"))
-              for key in ("build_stdout", "evidence"):
-                  path = p.get(key)
-                  if not path or not os.path.exists(path):
-                      continue
-                  errs = [l.strip() for l in open(path, errors="replace")
-                          if "error" in l.lower() or "cannot" in l.lower()]
-                  for l in errs[:6]:
-                      print(key, "line:", l[:300])
               cap = os.path.dirname(sys.argv[1])
               unit_dir = os.path.join(cap, p.get("profile", ""), "unit-0")
-              for fname in ("probe-build.stderr", "probe-build.stdout", "compiler-rule.json"):
+              for fname in ("probe-build.stderr", "probe-build.stdout"):
                   path = os.path.join(unit_dir, fname)
                   if not os.path.exists(path):
                       continue
-                  lines = [l.strip() for l in open(path, errors="replace")]
-                  for l in lines[:8]:
+                  for l in [x.strip() for x in open(path, errors="replace")][:6]:
                       print(fname, "line:", l[:300])
           PY
             fi
@@ -229,6 +216,22 @@ jobs:
             echo "::error::cargo-verus: $(ls -l "$VOSTD_DIR/tools/verus/source/target-verus/release/cargo-verus" 2>&1 || true)"
             tail -n 10 /tmp/spec-check-run.log | sed 's/^/::error::/'
             exit $status
+          fi
+
+      - name: Announce result
+        if: always()
+        run: |
+          if [[ -f "$CHECK_OUT/check/report.json" ]]; then
+            python3 - "$CHECK_OUT/check/report.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          cap = r["capture"]
+          s = r["summary"]
+          verdicts = ", ".join(f"{k}={v}" for k, v in s["verdicts"].items()) or "none"
+          print(f"::notice::capture reused={cap['reused']} analyses={s['analyses']} verdicts={verdicts}")
+          PY
+          else
+            echo "::notice::no report.json produced"
           fi
 
       - name: Publish summary
