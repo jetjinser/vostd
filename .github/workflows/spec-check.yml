@@ -114,15 +114,25 @@ jobs:
           VERUS_BIN=tools/verus/source/target-verus/release/verus
           if [[ -x "$VERUS_BIN" ]] && "$VERUS_BIN" --version >/dev/null 2>&1; then
             echo "Using cached pinned Verus"
-          else
+            exit 0
+          fi
+          set -o pipefail
+          {
             echo "Bootstrapping Verus at $VERUS_PIN"
             rm -rf tools/verus
             git init -q tools/verus
             git -C tools/verus remote add origin https://github.com/asterinas/verus.git
             git -C tools/verus fetch --depth 1 origin "$VERUS_PIN"
             git -C tools/verus checkout -q FETCH_HEAD
+            git -C tools/verus log --oneline -1
             cargo dv bootstrap
             "$VERUS_BIN" --version
+          } 2>&1 | tee /tmp/verus-bootstrap.log
+          status=${PIPESTATUS[0]}
+          if [[ $status -ne 0 ]]; then
+            echo "::error::Verus bootstrap failed ($status)"
+            tail -n 30 /tmp/verus-bootstrap.log | sed 's/^/::error::/'
+            exit $status
           fi
 
       - name: Checkout spec-check
