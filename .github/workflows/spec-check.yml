@@ -116,6 +116,7 @@ jobs:
             echo "Using cached pinned Verus"
             exit 0
           fi
+          set +e
           set -o pipefail
           {
             echo "Bootstrapping Verus at $VERUS_PIN"
