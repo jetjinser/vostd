@@ -239,6 +239,11 @@ jobs:
           s = r["summary"]
           verdicts = ", ".join(f"{k}={v}" for k, v in s["verdicts"].items()) or "none"
           print(f"::notice::capture reused={cap['reused']} analyses={s['analyses']} verdicts={verdicts}")
+          for a in r["analyses"]:
+              rep = a["report"]
+              print(f"::notice::analysis={a['name']} deps={rep.get('dependency_summary')} probes={rep.get('probe_summary')} target={rep.get('target_summary')}")
+              for v in rep.get("verdicts", [])[:8]:
+                  print(f"::notice::{v['name']}: {v['verdict']} ({v['detail']})")
           PY
           else
             echo "::notice::no report.json produced"
