@@ -66,12 +66,6 @@ jobs:
           ref: ${{ inputs['vostd-ref'] || 'borrowed-repr' }}
           submodules: false
 
-      - name: Prepare dv submodule (public main)
-        run: |
-          rm -rf dv
-          git clone --depth 1 https://github.com/asterinas/rust-deductive-verifier.git dv
-          git -C dv log --oneline -1
-
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
@@ -126,7 +120,11 @@ jobs:
             git -C tools/verus fetch --depth 1 origin "$VERUS_PIN"
             git -C tools/verus checkout -q FETCH_HEAD
             git -C tools/verus log --oneline -1
-            cargo dv bootstrap
+            cd tools/verus/source
+            ./tools/get-z3.sh
+            cargo build --release --manifest-path tools/vargo/Cargo.toml
+            ./tools/vargo/target/release/vargo build --release
+            cd "$VOSTD_DIR"
             "$VERUS_BIN" --version
           } 2>&1 | tee /tmp/verus-bootstrap.log
           status=${PIPESTATUS[0]}
