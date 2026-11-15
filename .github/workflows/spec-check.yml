@@ -1,0 +1,294 @@
+name: Spec Check (nightly)
+
+# Nightly spec-check station.
+#
+# The tool is coupled to rustc-private APIs (MIR probe) and currently supports
+# Verus d128dda / rustc 1.98.1.  This station therefore checks a vostd revision
+# built with that toolchain (fork branch borrowed-repr = 43da079) and pins
+# Verus accordingly.  Tracking upstream main requires porting the MIR probe to
+# the newer rustc API; that is a separate work item.
+#
+# Findings never fail the run (ANALYSIS-CONTRACT v1); the check exits non-zero
+# only on pipeline errors (config, capture, tool, unknown analysis).
+
+on:
+  push:
+    paths:
+      - .github/workflows/spec-check.yml
+  schedule:
+    - cron: "40 2 * * *"
+  workflow_dispatch:
+    inputs:
+      vostd-repository:
+        description: "vostd repository to check (owner/name)"
+        required: false
+        default: "jetjinser/vostd"
+      vostd-ref:
+        description: "vostd ref to check"
+        required: false
+        default: "borrowed-repr"
+      spec-check-repo:
+        description: "spec-check repository (owner/name)"
+        required: false
+        default: "jetjinser/spec-check"
+      spec-check-ref:
+        description: "spec-check ref to check out"
+        required: false
+        default: "master"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-check-${{ github.event.schedule || github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  VERUS_PIN: d128dda371ca4b19faa8b9b6e31425891ca9eadf
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  spec-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    env:
+      VOSTD_DIR: ${{ github.workspace }}
+      SPEC_CHECK_DIR: ${{ github.workspace }}/spec-check
+    steps:
+      - name: Checkout vostd
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs['vostd-repository'] || 'jetjinser/vostd' }}
+          ref: ${{ inputs['vostd-ref'] || 'borrowed-repr' }}
+          submodules: false
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential unzip pkg-config libssl-dev llvm
+
+      - name: Install project toolchain and target
+        id: rust
+        run: |
+          RUST_VERSION=$(sed -nE 's/^channel = "([^"]+)"/\1/p' rust-toolchain.toml | head -1)
+          echo "version=$RUST_VERSION" >> "$GITHUB_OUTPUT"
+          rustup toolchain install "$RUST_VERSION" --profile minimal \
+            --component rustc-dev,llvm-tools,rust-src
+          rustup target add x86_64-unknown-none --toolchain "$RUST_VERSION"
+          rustup default "$RUST_VERSION"
+          rustc -Vv
+
+      - name: Ensure rustc shared libraries
+        run: |
+          for tc in $(rustup toolchain list | awk '{print $1}'); do
+            rustup component add rustc-dev llvm-tools rust-src --toolchain "$tc" >/dev/null 2>&1 || true
+          done
+          LIBS="$(find "$HOME/.rustup/toolchains" -maxdepth 3 -type d -name lib | paste -sd:)"
+          echo "LD_LIBRARY_PATH=$LIBS${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+          echo "librustc_driver libraries found:"
+          find "$HOME/.rustup/toolchains" -name 'librustc_driver-*.so' | head
+
+      - name: Cache Verus
+        uses: actions/cache@v6
+        with:
+          path: |
+            tools/verus
+            !tools/verus/.git
+            !tools/verus/.git/**
+            !tools/verus/source/target
+            !tools/verus/source/target/**
+          key: ${{ runner.os }}-verus-${{ steps.rust.outputs.version }}-${{ env.VERUS_PIN }}
+
+      - name: Bootstrap Verus (pinned)
+        run: |
+          VERUS_BIN=tools/verus/source/target-verus/release/verus
+          if [[ -x "$VERUS_BIN" ]] && "$VERUS_BIN" --version >/dev/null 2>&1; then
+            echo "Using cached pinned Verus"
+            exit 0
+          fi
+          set +e
+          set -o pipefail
+          {
+            echo "Bootstrapping Verus at $VERUS_PIN"
+            rm -rf tools/verus
+            git init -q tools/verus
+            git -C tools/verus remote add origin https://github.com/asterinas/verus.git
+            git -C tools/verus fetch --depth 1 origin "$VERUS_PIN"
+            git -C tools/verus checkout -q FETCH_HEAD
+            git -C tools/verus log --oneline -1
+            cd tools/verus
+            cargo build --release --manifest-path tools/vargo/Cargo.toml
+            cd source
+            ./tools/get-z3.sh
+            ../tools/vargo/target/release/vargo build --release
+            cd "$VOSTD_DIR"
+            "$VERUS_BIN" --version
+          } 2>&1 | tee /tmp/verus-bootstrap.log
+          status=${PIPESTATUS[0]}
+          if [[ $status -ne 0 ]]; then
+            echo "::error::Verus bootstrap failed ($status)"
+            tail -n 60 /tmp/verus-bootstrap.log | sed 's/^/::error::/'
+            exit $status
+          fi
+
+      - name: Checkout spec-check
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ inputs['spec-check-repo'] || 'jetjinser/spec-check' }}
+          ref: ${{ inputs['spec-check-ref'] || 'master' }}
+          path: spec-check
+
+      - name: Prepare output directory
+        run: |
+          CHECK_OUT="$RUNNER_TEMP/spec-check-report"
+          mkdir -p "$CHECK_OUT"
+          echo "CHECK_OUT=$CHECK_OUT" >> "$GITHUB_ENV"
+          echo "artifact dir: $CHECK_OUT"
+
+      - name: Prepare smoke inputs
+        run: |
+          SMOKE="$CHECK_OUT/smoke"
+          rm -rf "$SMOKE"
+          mkdir -p "$SMOKE/crate"
+          cp -r "$SPEC_CHECK_DIR/examples/check-smoke/crate/src" "$SMOKE/crate/src"
+          cat > "$SMOKE/crate/Cargo.toml" <<EOF
+          [package]
+          name = "check-smoke-crate"
+          version = "0.1.0"
+          edition = "2021"
+          publish = false
+
+          [dependencies]
+          vstd = { path = "$VOSTD_DIR/tools/verus/source/vstd" }
+
+          [workspace]
+
+          [package.metadata.verus]
+          verify = true
+          EOF
+          cat > "$SMOKE/capture.json" <<'EOF'
+          {"profiles":[{"name":"smoke-lib","package":"check-smoke-crate","target":"x86_64-unknown-linux-gnu","tests":false,"features":[],"default_features":true}]}
+          EOF
+          cp "$SPEC_CHECK_DIR/examples/check-smoke/manifest.json" "$SMOKE/manifest.json"
+          {
+            echo "CAPTURE_CONFIG=$SMOKE/capture.json"
+            echo "CAPTURE_MANIFEST=$SMOKE/crate/Cargo.toml"
+            echo "ANALYSIS_MANIFEST=$SMOKE/manifest.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Run spec-check
+        env:
+          SPEC_CHECK_NO_NIX: '1'
+        run: |
+          echo "vostd: $VOSTD_DIR"
+          echo "spec-check: $SPEC_CHECK_DIR ($(git -C "$SPEC_CHECK_DIR" rev-parse HEAD))"
+          echo "artifact dir: $CHECK_OUT"
+          set +e
+          set -o pipefail
+          status=1
+          for attempt in 1 2; do
+            "$SPEC_CHECK_DIR/examples/ci/run-spec-check.sh" 2>&1 | tee /tmp/spec-check-run.log
+            status=${PIPESTATUS[0]}
+            [[ $status -eq 0 ]] && break
+            echo "::warning::run-spec-check attempt $attempt exited $status"
+            sleep 10
+          done
+          if [[ $status -ne 0 ]]; then
+            echo "::error::run-spec-check exited $status"
+            if [[ -f "$CHECK_OUT/capture/report.json" ]]; then
+              python3 - "$CHECK_OUT/capture/report.json" <<'PY' | sed 's/^/::error::/' | head -8 || true
+          import json, os, sys
+          d = json.load(open(sys.argv[1]))
+          print("capture status:", d.get("status"))
+          for p in d.get("profiles", []):
+              print("profile", p.get("profile"), "build_success", p.get("build_success"),
+                    "kind", p.get("build_failure_kind"), "exit", p.get("build_exit_code"),
+                    "registry_correspondence", p.get("registry_correspondence"))
+              for u in p.get("units", []):
+                  print("unit", u.get("status"), "variables", u.get("variables"),
+                        "error", u.get("error"), "expected", u.get("expected"),
+                        "evidence", u.get("evidence"))
+              cap = os.path.dirname(sys.argv[1])
+              unit_dir = os.path.join(cap, p.get("profile", ""), "unit-0")
+              for fname in ("probe-build.stderr", "probe-build.stdout"):
+                  path = os.path.join(unit_dir, fname)
+                  if not os.path.exists(path):
+                      continue
+                  for l in [x.strip() for x in open(path, errors="replace")][:6]:
+                      print(fname, "line:", l[:300])
+          PY
+            fi
+            echo "::error::rustc: $(rustc -V 2>&1 || true)"
+            echo "::error::cargo-verus: $(ls -l "$VOSTD_DIR/tools/verus/source/target-verus/release/cargo-verus" 2>&1 || true)"
+            tail -n 10 /tmp/spec-check-run.log | sed 's/^/::error::/'
+            exit $status
+          fi
+
+      - name: Announce result
+        if: always()
+        run: |
+          if [[ -f "$CHECK_OUT/check/report.json" ]]; then
+            python3 - "$CHECK_OUT/check/report.json" <<'PY'
+          import json, sys
+          r = json.load(open(sys.argv[1]))
+          cap = r["capture"]
+          s = r["summary"]
+          verdicts = ", ".join(f"{k}={v}" for k, v in s["verdicts"].items()) or "none"
+          print(f"::notice::capture reused={cap['reused']} analyses={s['analyses']} verdicts={verdicts}")
+          for a in r["analyses"]:
+              rep = a["report"]
+              print(f"::notice::analysis={a['name']} deps={rep.get('dependency_summary')} probes={rep.get('probe_summary')} target={rep.get('target_summary')}")
+              for v in rep.get("verdicts", [])[:8]:
+                  print(f"::notice::{v['name']}: {v['verdict']} ({v['detail']})")
+          PY
+          else
+            echo "::notice::no report.json produced"
+          fi
+
+      - name: Publish summary
+        if: always()
+        run: |
+          if [[ -f "$CHECK_OUT/check/report.json" ]]; then
+            python3 - "$CHECK_OUT/check/report.json" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, sys
+
+          report = json.load(open(sys.argv[1]))
+          capture = report["capture"]
+          summary = report["summary"]
+          print("## Spec check (nightly)")
+          print()
+          print(f"- spec-check CONFIG: `{report['project_config']}`")
+          stale = capture["recaptured_stale_reason"]
+          capture_state = "reused fresh capture" if capture["reused"] else "ran project-capture"
+          if stale:
+              capture_state += f" (stale: {stale})"
+          print(f"- capture: {capture_state}")
+          print(f"- analyses: {summary['analyses']}")
+          verdicts = summary["verdicts"]
+          if verdicts:
+              totals = ", ".join(f"{name}={count}" for name, count in verdicts.items())
+              print(f"- verdict totals: {totals}")
+          else:
+              print("- verdict totals: none")
+          print("- report artifact: `spec-check-report`")
+          PY
+          else
+            {
+              echo "## Spec check (nightly)"
+              echo
+              echo "- ❌ no report.json produced; see the run log"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: spec-check-report
+          path: ${{ runner.temp }}/spec-check-report/
+          retention-days: 7
+          if-no-files-found: warn
