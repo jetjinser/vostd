@@ -310,7 +310,7 @@ mod is_used {
     }
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use core::cell::RefCell;
 

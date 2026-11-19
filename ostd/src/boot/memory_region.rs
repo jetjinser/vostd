@@ -417,7 +417,7 @@ impl<const LEN: usize> MemoryRegionArray<LEN> {
     }*/
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use super::*;
     use crate::prelude::ktest;

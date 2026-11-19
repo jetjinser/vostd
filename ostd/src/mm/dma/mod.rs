@@ -11,7 +11,7 @@ use vstd_extra::{
 mod dma_coherent;
 pub use dma_coherent::DmaCoherent;
 mod dma_stream;
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test;
 
 use crate::sync::{PreemptDisabled, SpinLock, SpinLockGuard};

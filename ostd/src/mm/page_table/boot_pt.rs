@@ -304,7 +304,7 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
 
     }
 
-    #[cfg(ktest)]
+    #[cfg(all(ktest, feature = "full-ktest"))]
     pub(super) fn new(root_pt: FrameNumber) -> Self {
         Self { root_pt, _pretend_to_use: core::marker::PhantomData }
     }

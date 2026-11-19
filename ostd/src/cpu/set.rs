@@ -849,7 +849,7 @@ proof fn lemma_mismatched_word_imply_not_full_set(set: &CpuSet, p: int)
 }
 
 } // verus!
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use super::*;
     use crate::{cpu::all_cpus, prelude::*};

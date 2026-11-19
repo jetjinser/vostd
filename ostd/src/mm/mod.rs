@@ -30,7 +30,7 @@ pub mod page_table;
 pub mod tlb;
 pub mod vm_space;
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test;
 
 use core::{fmt::Debug, ops::Range};

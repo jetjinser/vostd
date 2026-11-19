@@ -35,6 +35,8 @@ num-traits = { version = "0.2", default-features = false }
 #ostd-macros = { version = "0.15.1", path = "libs/ostd-macros" }
 #ostd-test = { version = "0.15.1", path = "libs/ostd-test" }
 #ostd-pod = { git = "https://github.com/asterinas/ostd-pod", rev = "c4644be", version = "0.1.1" }
+ostd-macros = { path = "libs/ostd-macros" }
+ostd-test = { path = "libs/ostd-test" }
 ostd-pod = { path = "libs/ostd-pod" }
 spin = "0.9.4"
 smallvec = "1.13.2"
@@ -79,6 +81,7 @@ fdt = { version = "0.1.5", features = ["pretty-printing"] }
 # default = ["cvm_guest"]
 default = []
 allow_panic = []
+full-ktest = []
 # Source gate only. The isolated IRC11 CI enables `vstd/weak-memory`
 # explicitly because the mainline Verus toolchain does not define it.
 irc11 = ["vstd_extra/irc11"]

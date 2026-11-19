@@ -398,12 +398,12 @@ impl KVirtArea {
         self.range.start..self.range.end
     }
 
-    #[cfg(ktest)]
+    #[cfg(all(ktest, feature = "full-ktest"))]
     pub fn len(&self) -> usize {
         self.range.len()
     }
 
-    #[cfg(ktest)]
+    #[cfg(all(ktest, feature = "full-ktest"))]
     pub fn query(&self, addr: Vaddr) -> Option<super::MappedItem> {
         use align_ext::AlignExt;
 

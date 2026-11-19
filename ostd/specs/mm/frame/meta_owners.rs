@@ -6,7 +6,7 @@ use vstd_extra::{
     resource::ghost_resource::count_auth::{Count, CountResource},
 };
 
-use crate::specs::{arch::NR_ENTRIES, mm::frame::linked_list::linked_list_owners::StoredLink};
+use crate::specs::{arch::NR_ENTRIES, mm::frame::linked_list::linked_list_owners::{MetaSlotSmall, StoredLink}};
 
 use super::*;
 use crate::mm::{
@@ -103,6 +103,45 @@ pub enum MetaSlotStorage {
 /// it can then be used to stand in for `dyn AnyFrameMeta`.
 unsafe impl AnyFrameMeta for MetaSlotStorage {
     uninterp spec fn vtable_ptr(&self) -> usize;
+}
+
+impl Repr<MetaSlotSmall> for MetaSlotSmall {
+    type ReprPerm = ();
+
+    open spec fn wf(slot: MetaSlotSmall, perm: ()) -> bool {
+        true
+    }
+
+    open spec fn to_repr_spec(self, perm: ()) -> (MetaSlotSmall, ()) {
+        (self, ())
+    }
+
+    fn to_repr(self, Tracked(perm): Tracked<&mut ()>) -> MetaSlotSmall {
+        self
+    }
+
+    open spec fn from_repr_spec(slot: MetaSlotSmall, perm: ()) -> Self {
+        slot
+    }
+
+    fn from_repr(slot: MetaSlotSmall, Tracked(perm): Tracked<&()>) -> Self {
+        slot
+    }
+
+    fn from_borrowed<'a>(slot: &'a MetaSlotSmall, Tracked(perm): Tracked<&'a ()>) -> &'a Self {
+        slot
+    }
+
+    fn from_borrowed_mut<'a>(
+        slot: &'a mut MetaSlotSmall,
+        Tracked(perm): Tracked<&'a mut ()>,
+    ) -> &'a mut Self {
+        slot
+    }
+
+    proof fn from_to_repr(self, perm: ()) {}
+    proof fn to_from_repr(slot: MetaSlotSmall, perm: ()) {}
+    proof fn to_repr_wf(self, perm: ()) {}
 }
 
 impl Repr<MetaSlotStorage> for MetaSlotStorage {

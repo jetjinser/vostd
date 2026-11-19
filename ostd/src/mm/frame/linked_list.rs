@@ -1727,3 +1727,68 @@ unsafe impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> AnyFrameMeta for Link<M> {
 }
 
 } // verus!
+
+#[cfg(ktest)]
+mod f039_membership_ktest {
+    use super::*;
+    use ostd_macros::ktest;
+    use crate::mm::frame::allocator::FrameAllocOptions;
+
+    verus! {
+    unsafe impl AnyFrameMeta for MetaSlotSmall {
+        uninterp spec fn vtable_ptr(&self) -> usize;
+
+        open spec fn on_drop_pre(
+            &self,
+            _reader: crate::mm::VmReader<'_, crate::mm::Infallible>,
+            _regions: crate::specs::mm::frame::meta_region_owners::MetaRegionOwners,
+            _vm_io_owner: crate::specs::mm::io::VmIoOwner,
+        ) -> bool {
+            true
+        }
+
+        fn on_drop(
+            &mut self,
+            _reader: &mut crate::mm::VmReader<crate::mm::Infallible>,
+            _regions: Tracked<&mut crate::specs::mm::frame::meta_region_owners::MetaRegionOwners>,
+            _vm_io_owner: Tracked<&mut crate::specs::mm::io::VmIoOwner>,
+        ) {
+        }
+
+    }
+    }
+
+    #[ktest]
+    fn linked_list_contains_membership() {
+        let alloc = FrameAllocOptions::new();
+        let frame1 = alloc
+            .alloc_frame_with(Link { next: None, prev: None, meta: MetaSlotSmall })
+            .unwrap();
+        let frame1_addr = frame1.start_paddr();
+        let frame2 = alloc
+            .alloc_frame_with(Link { next: None, prev: None, meta: MetaSlotSmall })
+            .unwrap();
+        let frame2_addr = frame2.start_paddr();
+        let frame3 = alloc
+            .alloc_frame_with(Link { next: None, prev: None, meta: MetaSlotSmall })
+            .unwrap();
+        let frame3_addr = frame3.start_paddr();
+        let outside = alloc
+            .alloc_frame_with(Link { next: None, prev: None, meta: MetaSlotSmall })
+            .unwrap();
+        let outside_addr = outside.start_paddr();
+
+        let mut list: LinkedList<MetaSlotSmall> = LinkedList::new();
+        let unique1: UniqueFrame<Link<MetaSlotSmall>> = match frame1.try_into() { Ok(frame) => frame, Err(_) => panic!("failed to convert frame") };
+        list.push_front(unique1);
+        let unique2: UniqueFrame<Link<MetaSlotSmall>> = match frame2.try_into() { Ok(frame) => frame, Err(_) => panic!("failed to convert frame") };
+        list.push_front(unique2);
+        let unique3: UniqueFrame<Link<MetaSlotSmall>> = match frame3.try_into() { Ok(frame) => frame, Err(_) => panic!("failed to convert frame") };
+        list.push_front(unique3);
+
+        assert!(!list.contains(outside_addr));
+        assert!(list.contains(frame1_addr));
+        assert!(list.contains(frame2_addr));
+        assert!(list.contains(frame3_addr));
+    }
+}

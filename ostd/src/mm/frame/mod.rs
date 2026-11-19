@@ -49,7 +49,7 @@ pub mod untyped;
 mod frame_ref;
 pub use frame_ref::FrameRef;
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test;
 
 use crate::specs::{

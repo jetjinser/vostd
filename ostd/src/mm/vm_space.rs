@@ -1637,7 +1637,7 @@ impl<'a, A: InAtomicMode> CursorMut<'a, A> {
     static ACTIVATED_VM_SPACE: *const VmSpace = core::ptr::null();
 }*/
 
-/*#[cfg(ktest)]
+/*#[cfg(all(ktest, feature = "full-ktest"))]
 pub(super) fn get_activated_vm_space() -> *const VmSpace {
     ACTIVATED_VM_SPACE.load()
 }*/

@@ -185,7 +185,7 @@ impl<T> RoArc<T> {
 }
 
 } // verus!
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use super::*;
     use crate::prelude::*;

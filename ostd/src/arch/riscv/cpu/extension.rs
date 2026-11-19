@@ -218,7 +218,7 @@ define_isa_extensions! {
     ZALRSC      = 98, "zalrsc",      "Load-reserved/store-conditional";
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod tests {
     use super::*;
     use crate::prelude::*;

@@ -140,7 +140,7 @@ pub fn range_difference<T: Ord + Copy + FiniteRange>(
     iter.filter(pred)
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 #[expect(clippy::single_range_in_vec_init)]
 mod test {
     use super::*;

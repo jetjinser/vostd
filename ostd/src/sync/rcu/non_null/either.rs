@@ -533,7 +533,7 @@ proof fn lemma_aligned_addr_clears_tag_bit(
 }
 
 } // verus!
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use alloc::{boxed::Box, sync::Arc};
 

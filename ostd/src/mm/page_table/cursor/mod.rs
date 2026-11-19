@@ -149,7 +149,7 @@ pub enum PageTableFrag<C: PageTableConfig> {
 }
 
 impl<C: PageTableConfig> PageTableFrag<C> {
-    #[cfg(ktest)]
+    #[cfg(all(ktest, feature = "full-ktest"))]
     pub fn va_range(&self) -> Range<Vaddr> {
         match self {
             PageTableFrag::Mapped { va, item } => {

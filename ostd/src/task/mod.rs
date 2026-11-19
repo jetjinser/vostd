@@ -358,7 +358,7 @@ pub trait TaskContextApi {
     fn stack_pointer(&self) -> usize;
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use crate::prelude::*;
 

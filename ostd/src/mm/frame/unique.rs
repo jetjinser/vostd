@@ -377,7 +377,7 @@ impl<M: AnyFrameMeta + Repr<MetaSlotStorage> + OwnerOf + ?Sized> UniqueFrame<M> 
     //
     // FIXME: We may have a better `Segment` and `UniqueSegment` design to
     // allow the allocator hold the ownership of all the frames in a chunk
-    // instead of the head. Then this weird public API can be `#[cfg(ktest)]`.
+    // instead of the head. Then this weird public API can be `#[cfg(all(ktest, feature = "full-ktest"))]`.
     #[verus_spec(
         with
             Tracked(owner): Tracked<UniqueFrameOwner<M>>,

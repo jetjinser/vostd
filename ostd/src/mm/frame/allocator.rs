@@ -146,7 +146,7 @@ impl FrameAllocOptions {
 
 } // verus!
 /*
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 #[ktest]
 fn test_alloc_dealloc() {
     // Here we allocate and deallocate frames in random orders to test the allocator.

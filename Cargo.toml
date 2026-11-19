@@ -51,7 +51,7 @@ codegen-units = 1
 
 [workspace.dependencies]
 # Verus
-vstd = { path = "tools/verus/source/vstd", default-features = false, features = ["alloc"] }
+vstd = { path = "tools/verus/source/vstd", default-features = false, features = ["alloc", "nonzero_internals"] }
 bitvec = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [workspace.package]

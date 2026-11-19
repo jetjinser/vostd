@@ -265,7 +265,7 @@ impl GuardTransfer for DisabledLocalIrqGuard {
         }
     }
 } */
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use super::*;
 

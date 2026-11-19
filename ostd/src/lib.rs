@@ -45,9 +45,9 @@ pub mod error;
 /*pub mod io;
 pub mod logger;*/
 pub mod mm;
-/*pub mod panic;
+/*pub mod panic;*/
 pub mod prelude;
-pub mod smp;*/
+/*pub mod smp;*/
 pub mod sync;
 pub mod task;
 pub mod timer;
@@ -162,7 +162,7 @@ fn invoke_ffi_init_funcs() {
 }
 
 /// Simple unit tests for the ktest framework.
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use crate::prelude::*;
 

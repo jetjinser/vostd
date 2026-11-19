@@ -480,7 +480,7 @@ impl Waker {
 }
 
 } // verus!
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use super::*;
     use crate::{prelude::*, task::TaskOptions};

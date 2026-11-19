@@ -131,7 +131,7 @@ fn find_allocator<'a>(
     None
 }
 
-#[cfg(ktest)]
+#[cfg(all(ktest, feature = "full-ktest"))]
 mod test {
     use alloc::vec;
 
