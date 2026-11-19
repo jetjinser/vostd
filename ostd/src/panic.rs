@@ -1,26 +1,20 @@
 // SPDX-License-Identifier: MPL-2.0
+
 //! Panic support.
-use core::ffi::c_void;
 
-use crate::{
-    arch::qemu::{QemuExitCode, exit_qemu},
-    early_print, early_println,
-    sync::SpinLock,
-};
+use crate::early_println;
 
-extern crate cfg_if;
 extern crate gimli;
-
-use gimli::Register;
 
 /// The default panic handler for OSTD based kernels.
 ///
 /// The user can override it by defining their own panic handler with the macro
 /// `#[ostd::panic_handler]`.
 #[linkage = "weak"]
-#[no_mangle]
+// SAFETY: The name does not collide with other symbols.
+#[unsafe(no_mangle)]
 pub fn __ostd_panic_handler(info: &core::panic::PanicInfo) -> ! {
-    let _irq_guard = crate::trap::irq::disable_local();
+    let _irq_guard = crate::irq::disable_local();
 
     crate::cpu_local_cell! {
         static IN_PANIC: bool = false;
@@ -39,23 +33,62 @@ pub fn __ostd_panic_handler(info: &core::panic::PanicInfo) -> ! {
     abort();
 }
 
-/// Aborts the QEMU
+/// Aborts the system.
+///
+/// This function will first attempt to power off the system. If that fails, it will halt all CPUs.
 pub fn abort() -> ! {
-    exit_qemu(QemuExitCode::Failed);
+    // TODO: The main purpose of powering off here is to allow QEMU to exit. Otherwise, the CI may
+    // freeze after panicking. However, this is unnecessary and may prevent debugging on a real
+    // machine (i.e., the message will disappear afterward).
+    crate::power::poweroff(crate::power::ExitCode::Failure);
 }
 
-#[cfg(not(target_arch = "loongarch64"))]
+/// A guard that aborts the system if dropped.
+///
+/// This is useful to ensure that certain objects will not be dropped during
+/// panic handling.
+#[derive(Debug)]
+pub(crate) struct PanicGuard {
+    _private: (),
+}
+
+impl Drop for PanicGuard {
+    fn drop(&mut self) {
+        early_println!("Panicked in `PanicGuard`, aborting the system");
+        abort();
+    }
+}
+
+impl PanicGuard {
+    /// Creates a panic guard that aborts the system if dropped.
+    pub(crate) fn new() -> Self {
+        PanicGuard { _private: () }
+    }
+
+    /// Finishes panic guarding by forgetting the guard.
+    ///
+    /// After the panic guarding finishes, it no longer aborts the system
+    /// when panic happens.
+    pub(crate) fn forget(self) {
+        core::mem::forget(self);
+    }
+}
+
 pub use unwinding::panic::{begin_panic, catch_unwind};
 
 /// Prints the stack trace of the current thread to the console.
 ///
 /// The printing procedure is protected by a spin lock to prevent interleaving.
-#[cfg(not(target_arch = "loongarch64"))]
 pub fn print_stack_trace() {
+    use core::ffi::c_void;
+
+    use gimli::Register;
     use unwinding::abi::{
         _Unwind_Backtrace, _Unwind_FindEnclosingFunction, _Unwind_GetGR, _Unwind_GetIP,
         UnwindContext, UnwindReasonCode,
     };
+
+    use crate::{early_print, sync::SpinLock};
 
     /// We acquire a global lock to prevent the frames in the stack trace from
     /// interleaving. The spin lock is used merely for its simplicity.
@@ -83,22 +116,18 @@ pub fn print_stack_trace() {
         // Print the first 8 general registers for any architecture. The register number follows
         // the DWARF standard.
         for i in 0..8u16 {
-            let reg_i = _Unwind_GetGR(unwind_ctx, i as i32);
-            cfg_if::cfg_if! {
-                if #[cfg(target_arch = "x86_64")] {
-                    let reg_name = gimli::X86_64::register_name(Register(i)).unwrap_or("unknown");
-                } else if #[cfg(target_arch = "riscv64")] {
-                    let reg_name = gimli::RiscV::register_name(Register(i)).unwrap_or("unknown");
-                } else if #[cfg(target_arch = "aarch64")] {
-                    let reg_name = gimli::AArch64::register_name(Register(i)).unwrap_or("unknown");
-                } else {
-                    let reg_name = "unknown";
-                }
-            }
-            if i % 4 == 0 {
+            let reg_name = cfg_select! {
+                target_arch = "x86_64" => gimli::X86_64::register_name(Register(i)),
+                target_arch = "riscv64" => gimli::RiscV::register_name(Register(i)),
+                target_arch = "loongarch64" => gimli::LoongArch::register_name(Register(i)),
+                target_arch = "aarch64" => gimli::AArch64::register_name(Register(i)),
+                _ => None,
+            };
+            let reg_val = _Unwind_GetGR(unwind_ctx, i as i32);
+            if i.is_multiple_of(4) {
                 early_print!("\n    ");
             }
-            early_print!(" {} {:#18x};", reg_name, reg_i);
+            early_print!(" {} {:#18x};", reg_name.unwrap_or("unknown"), reg_val);
         }
         early_print!("\n\n");
         UnwindReasonCode::NO_REASON
@@ -106,23 +135,4 @@ pub fn print_stack_trace() {
 
     let mut data = CallbackData { counter: 0 };
     _Unwind_Backtrace(callback, &mut data as *mut _ as _);
-}
-
-#[cfg(target_arch = "loongarch64")]
-pub fn catch_unwind<R, F: FnOnce() -> R>(
-    f: F,
-) -> Result<R, alloc::boxed::Box<dyn core::any::Any + Send>> {
-    // TODO: Support unwinding in LoongArch.
-    Ok(f())
-}
-
-#[cfg(target_arch = "loongarch64")]
-pub fn begin_panic<R>(_: alloc::boxed::Box<R>) {
-    // TODO: Support panic context in LoongArch.
-}
-
-#[cfg(target_arch = "loongarch64")]
-pub fn print_stack_trace() {
-    // TODO: Support stack trace print in LoongArch.
-    early_println!("Printing stack trace:");
 }
