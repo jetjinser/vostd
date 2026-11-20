@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+use vstd::prelude::*;
 use core::arch::global_asm;
 
 use multiboot2::{BootInformation, BootInformationHeader, MemoryAreaType};
@@ -10,6 +11,12 @@ use crate::{
     },
     mm::{Paddr, kspace::paddr_to_vaddr},
 };
+
+verus! {
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExBootInformation<'a>(BootInformation<'a>);
+}
 
 global_asm!(include_str!("header.S"));
 
@@ -84,6 +91,7 @@ impl From<MemoryAreaType> for MemoryRegionType {
     }
 }
 
+#[verifier::external_body]
 fn parse_memory_regions(mb2_info: &BootInformation) -> MemoryRegionArray {
     let mut regions = MemoryRegionArray::new();
 
@@ -139,9 +147,12 @@ fn parse_memory_regions(mb2_info: &BootInformation) -> MemoryRegionArray {
 /// The entry point of Rust code called by inline asm.
 #[no_mangle]
 unsafe extern "sysv64" fn __multiboot2_entry(boot_magic: u32, boot_params: u64) -> ! {
+    crate::arch::serial::init();
+    crate::early_println!("F039_BOOT: entered multiboot2 rust entry");
     assert_eq!(boot_magic, multiboot2::MAGIC);
     let mb2_info =
         unsafe { BootInformation::load(boot_params as *const BootInformationHeader).unwrap() };
+    crate::early_println!("F039_BOOT: parsed multiboot2 tags");
 
     use crate::boot::{EARLY_INFO, EarlyBootInfo, call_ostd_main};
 
@@ -153,6 +164,8 @@ unsafe extern "sysv64" fn __multiboot2_entry(boot_magic: u32, boot_params: u64) 
         framebuffer_arg: parse_framebuffer_info(&mb2_info),
         memory_regions: parse_memory_regions(&mb2_info),
     });
+
+    crate::early_println!("F039_BOOT: early info ready");
 
     call_ostd_main();
 }

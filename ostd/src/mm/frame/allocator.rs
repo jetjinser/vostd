@@ -9,12 +9,12 @@ use super::{Frame, meta::AnyFrameMeta, segment::Segment};
 use crate::{
     boot::memory_region::MemoryRegionType,
     error::Error,
-    //    impl_frame_meta_for,
     mm::{PAGE_SIZE, Paddr, paddr_to_vaddr},
-    //    util::ops::range_difference,
+    util::ops::range_difference,
 };
 use align_ext::AlignExt;
 use core::{alloc::Layout, ops::Range};
+use log::{debug, info};
 
 verus! {
 
@@ -84,11 +84,10 @@ impl FrameAllocOptions {
             }
     )]
     #[verifier::external_body]
-    pub fn alloc_frame_with<M: AnyFrameMeta + Repr<MetaSlotStorage>>(&self, metadata: M) -> Result<
+    pub fn alloc_frame_with<M: AnyFrameMeta + Repr<MetaSlotStorage> + OwnerOf>(&self, metadata: M) -> Result<
         Frame<M>,
         Error,
     > {
-        unimplemented!()/*
         let single_layout = Layout::from_size_align(PAGE_SIZE, PAGE_SIZE).unwrap();
         let frame = get_global_frame_allocator()
             .alloc(single_layout)
@@ -102,7 +101,6 @@ impl FrameAllocOptions {
         }
 
         Ok(frame)
-        */
 
     }/*
     /// Allocates a contiguous range of untyped frames without metadata.
@@ -145,7 +143,6 @@ impl FrameAllocOptions {
 }
 
 } // verus!
-/*
 #[cfg(all(ktest, feature = "full-ktest"))]
 #[ktest]
 fn test_alloc_dealloc() {
@@ -253,7 +250,7 @@ pub(crate) unsafe fn init() {
             // Truncate the early allocated frames if there is an overlap.
             for r1 in range_difference(&(region.base()..region.end()), &range_1) {
                 for r2 in range_difference(&r1, &range_2) {
-                    log::info!("Adding free frames to the allocator: {:x?}", r2);
+                    info!("Adding free frames to the allocator: {:x?}", r2);
                     get_global_frame_allocator().add_free_memory(r2.start, r2.len());
                 }
             }
@@ -318,12 +315,12 @@ impl EarlyFrameAllocator {
             }
         }
 
-        log::debug!(
+        debug!(
             "Early frame allocator (below 4G) at: {:#x?}",
             under_4g_range
         );
         if !max_range.is_empty() {
-            log::debug!("Early frame allocator (above 4G) at: {:#x?}", max_range);
+            debug!("Early frame allocator (above 4G) at: {:#x?}", max_range);
         }
 
         Self {
@@ -344,11 +341,11 @@ impl EarlyFrameAllocator {
             (&mut self.max_end, self.max_range.end),
         ] {
             let allocated = tail.align_up(align);
-            if let Some(allocated_end) = allocated.checked_add(size)
-                && allocated_end <= end
-            {
-                *tail = allocated_end;
-                return Some(allocated);
+            if let Some(allocated_end) = allocated.checked_add(size) {
+                if allocated_end <= end {
+                    *tail = allocated_end;
+                    return Some(allocated);
+                }
             }
         }
 
@@ -367,10 +364,14 @@ impl EarlyFrameAllocator {
 ///
 /// Frames allocated with [`early_alloc`] are not immediately tracked with
 /// frame metadata. But [`super::meta::init`] will track them later.
+verus! {
 #[derive(Debug)]
 pub(crate) struct EarlyAllocatedFrameMeta;
 
-impl_frame_meta_for!(EarlyAllocatedFrameMeta);
+unsafe impl AnyFrameMeta for EarlyAllocatedFrameMeta {
+    uninterp spec fn vtable_ptr(&self) -> usize;
+}
+}
 
 /// Allocates a contiguous range of frames in the early boot phase.
 ///
@@ -400,4 +401,3 @@ pub(crate) unsafe fn init_early_allocator() {
     let mut early_allocator = EARLY_ALLOCATOR.lock();
     *early_allocator = Some(EarlyFrameAllocator::new());
 }
-*/

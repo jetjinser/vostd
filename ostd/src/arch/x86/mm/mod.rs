@@ -342,11 +342,10 @@ pub uninterp spec fn current_page_table_paddr_spec() -> Paddr;
         current_page_table_paddr_spec(),
 )]
 pub fn current_page_table_paddr() -> Paddr {
-    /* x86_64::registers::control::Cr3::read_raw()
-    .0
-    .start_address()
-    .as_u64() as Paddr*/
-    unimplemented!()
+    let cr3: usize;
+    // SAFETY: Reading CR3 is permitted in ring 0 and does not change machine state.
+    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
+    cr3 & !(PAGE_SIZE - 1)
 }
 
 verus! {

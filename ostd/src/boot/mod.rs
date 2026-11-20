@@ -7,15 +7,15 @@
 pub mod memory_region;
 //pub mod smp;
 
-/* use alloc::{
+use alloc::{
     string::{String, ToString},
     vec::Vec,
-}; */
+};
+use vstd::prelude::verus;
 
 use memory_region::{MemoryRegion, MemoryRegionArray};
 use spin::Once;
 
-/*
 /// The boot information provided by the bootloader.
 pub struct BootInfo {
     /// The name of the bootloader.
@@ -38,7 +38,6 @@ pub fn boot_info() -> &'static BootInfo {
 }
 
 static INFO: Once<BootInfo> = Once::new();
-*/
 /// ACPI information from the bootloader.
 ///
 /// The boot crate can choose either providing the raw RSDP physical address or
@@ -69,6 +68,12 @@ pub struct BootloaderFramebufferArg {
     pub bpp: usize,
 }
 
+verus! {
+#[verifier::external_type_specification]
+#[verifier::external_body]
+pub struct ExBootloaderFramebufferArg(BootloaderFramebufferArg);
+}
+
 /*************************** Boot-time information ***************************/
 
 /// The boot-time boot information.
@@ -91,7 +96,6 @@ pub(crate) struct EarlyBootInfo {
 /// The boot-time information.
 pub(crate) static EARLY_INFO: Once<EarlyBootInfo> = Once::new();
 
-/*
 /// Initializes the boot information.
 ///
 /// This function copies the boot-time accessible information to the heap to
@@ -130,4 +134,3 @@ pub(crate) fn call_ostd_main() -> ! {
         __ostd_main();
     }
 }
-*/

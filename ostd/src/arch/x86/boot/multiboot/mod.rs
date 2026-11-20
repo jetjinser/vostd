@@ -364,6 +364,8 @@ impl Iterator for MemoryEntryIter {
 /// The entry point of Rust code called by inline asm.
 #[no_mangle]
 unsafe extern "sysv64" fn __multiboot_entry(boot_magic: u32, boot_params: u64) -> ! {
+    crate::arch::serial::init();
+    crate::early_println!("F039_BOOT: multiboot1 magic={:#x}", boot_magic);
     assert_eq!(boot_magic, MULTIBOOT_ENTRY_MAGIC);
     let mb1_info =
         unsafe { &*(paddr_to_vaddr(boot_params as usize) as *const MultibootLegacyInfo) };
@@ -378,6 +380,8 @@ unsafe extern "sysv64" fn __multiboot_entry(boot_magic: u32, boot_params: u64) -
         framebuffer_arg: parse_framebuffer_info(mb1_info),
         memory_regions: parse_memory_regions(mb1_info),
     });
+
+    crate::early_println!("F039_BOOT: multiboot1 early info ready");
 
     call_ostd_main();
 }

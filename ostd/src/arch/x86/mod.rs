@@ -1,19 +1,59 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Platform-specific code for the x86 platform.
-/*pub mod boot;
+pub mod boot;
+/*
 pub(crate) mod cpu;
 pub mod device;
 pub(crate) mod ex_table;
 pub(crate) mod io;
-pub(crate) mod iommu;*/
+pub(crate) mod iommu;
+*/
 pub(crate) mod irq;
 pub(crate) mod kernel;
 pub(crate) mod mm;
+pub(crate) mod serial;
 /*pub(crate) mod pci;
 pub mod qemu;
 pub(crate) mod serial;
 pub(crate) mod task; */
 pub mod timer;
+
+#[cfg(ktest)]
+macro_rules! if_tdx_enabled {
+    ($if_block:block else $else_block:block) => {{ $else_block }};
+    ($if_block:block) => {{}};
+}
+#[cfg(ktest)]
+pub(crate) use if_tdx_enabled;
+
+/// Enables the NX bit before the ktest path installs non-executable mappings.
+#[cfg(ktest)]
+pub(crate) unsafe fn enable_nxe_for_ktest() {
+    const IA32_EFER: u32 = 0xC000_0080;
+    let mut eax: u32;
+    let edx: u32;
+    // SAFETY: IA32_EFER is readable and writable at kernel privilege.
+    unsafe {
+        core::arch::asm!(
+            "rdmsr",
+            in("ecx") IA32_EFER,
+            out("eax") eax,
+            out("edx") edx,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    eax |= 1 << 11;
+    // SAFETY: Preserve the other EFER bits and set only NXE.
+    unsafe {
+        core::arch::asm!(
+            "wrmsr",
+            in("ecx") IA32_EFER,
+            in("eax") eax,
+            in("edx") edx,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+}
 /* pub mod trap; */
 
 /*use io::construct_io_mem_allocator_builder;

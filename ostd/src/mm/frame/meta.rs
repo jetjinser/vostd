@@ -111,18 +111,19 @@ use core::{
 use self::mapping::{frame_to_meta, meta_to_frame};
 use crate::mm::io::{Infallible, VmReader};
 use crate::{
-    //    boot::memory_region::MemoryRegionType,
+    boot::memory_region::MemoryRegionType,
     //    const_assert,
     mm::{
+        PAGE_SIZE,
         /*VmReader,*/
         /*Infallible,*/ Paddr,
         PagingLevel,
         //Segment,
         Vaddr,
         kspace::FRAME_METADATA_RANGE,
-        //        frame::allocator::{self, EarlyAllocatedFrameMeta},
+        frame::allocator,
         paddr_to_vaddr,
-        //        page_table::boot_pt,
+        page_table::boot_pt,
         page_prop::{CachePolicy, PageFlags, PageProperty, PrivilegedPageFlags},
     },
     //    panic::abort,
@@ -131,11 +132,8 @@ use crate::{
 
 verus! {
 
-/* /// The maximum number of bytes of the metadata of a frame.
-pub const FRAME_METADATA_MAX_SIZE: usize = META_SLOT_SIZE
-    - size_of::<AtomicU64>()
-    - size_of::<FrameMetaVtablePtr>()
-    - size_of::<AtomicU64>(); */
+/// The maximum number of bytes of the metadata of a frame.
+pub const FRAME_METADATA_MAX_SIZE: usize = 40;
 /// The maximum alignment in bytes of the metadata of a frame.
 pub const FRAME_METADATA_MAX_ALIGN: usize = META_SLOT_SIZE;
 
@@ -268,7 +266,7 @@ Send + Sync {
     spec fn vtable_ptr(&self) -> usize where Self: Sized;
 }
 
-/*/// Makes a structure usable as a frame metadata.
+/// Makes a structure usable as a frame metadata.
 #[macro_export]
 macro_rules! impl_frame_meta_for {
     // Implement without specifying the drop behavior.
@@ -285,7 +283,7 @@ macro_rules! impl_frame_meta_for {
     };
 }
 
-pub use impl_frame_meta_for;*/
+pub use impl_frame_meta_for;
 
 /// The error type for getting the frame from a physical address.
 #[derive(Debug)]
@@ -359,7 +357,7 @@ impl MetaSlot {
             perm.addr(),
     )]
     fn addr_of(&self) -> Vaddr {
-        unimplemented!()
+        self as *const Self as Vaddr
     }
 
     /// Initializes the metadata slot of a frame assuming it is unused.
@@ -880,34 +878,13 @@ impl MetaSlot {
                 == old(metadata_perm).vtable_ptr_perm.pptr(),
     )]
     pub(super) unsafe fn drop_meta_in_place(&self) {
-        let paddr = self.frame_paddr();
-
-        // SAFETY: We have exclusive access to the frame metadata.
-        let vtable_ptr: *const core::ptr::DynMetadata<dyn AnyFrameMeta> = unimplemented!();
-        // SAFETY: The frame metadata is initialized and valid.
-        let vtable_ptr = unsafe { *vtable_ptr };
-
-        let storage_ptr: *mut () = unimplemented!();
-        let meta_ptr: *mut dyn AnyFrameMeta = core::ptr::from_raw_parts_mut(
-            storage_ptr,
-            vtable_ptr,
-        );
-
-        // SAFETY: The implementer of the frame metadata decides that if the
-        // frame is safe to be read or not.
-        let mut reader: VmReader<'_, Infallible> = unimplemented!();
-
-        // SAFETY: `ptr` points to the metadata storage which is valid to be
-        // mutably borrowed under `vtable_ptr` because the metadata is valid,
-        // the vtable is correct, and we have exclusive access.
-        let regions: Tracked<&mut MetaRegionOwners> = Tracked::assume_new();
-        let vm_io_owner: Tracked<&mut crate::specs::mm::io::VmIoOwner> = Tracked::assume_new();
-        unsafe {
-            // Invoke the custom `on_drop` handler.
-            (*meta_ptr).on_drop(&mut reader, regions, vm_io_owner);
-            // Drop the frame metadata.
-            core::ptr::drop_in_place(meta_ptr);
-        }
+        // Runtime metadata is represented by the executable storage enum.
+        // Drop that value while the metadata slot is exclusively owned.
+        let storage = self
+            .storage
+            .take(Tracked(&mut metadata_perm.storage_perm));
+        drop(storage);
+        self.vtable_ptr.put(Tracked(&mut metadata_perm.vtable_ptr_perm), 0);
     }
 }
 
@@ -916,6 +893,71 @@ impl MetaSlot {
 pub struct MetaPageMeta {}
 
 //impl_frame_meta_for!(MetaPageMeta);
+
+/// Initializes the metadata slots needed by the runtime frame allocator.
+/// The metadata pages remain permanently reserved from the early allocator.
+#[verifier::external_body]
+pub(crate) unsafe fn init() -> core::ops::Range<Paddr> {
+    let regions = &crate::boot::EARLY_INFO.get().unwrap().memory_regions;
+    let max_paddr = regions
+        .iter()
+        .filter(|region| region.typ() == MemoryRegionType::Usable)
+        .map(|region| region.end())
+        .max()
+        .expect("boot info contains no usable memory");
+
+    let nr_frames = max_paddr.div_ceil(PAGE_SIZE);
+    let nr_meta_pages = nr_frames
+        .checked_mul(META_SLOT_SIZE)
+        .expect("metadata size overflow")
+        .div_ceil(PAGE_SIZE);
+    let meta_start = allocator::early_alloc(
+        Layout::from_size_align(nr_meta_pages * PAGE_SIZE, PAGE_SIZE).unwrap(),
+    )
+    .expect("not enough memory for frame metadata");
+
+    let slots = paddr_to_vaddr(meta_start) as *mut MetaSlot;
+    for index in 0..nr_frames {
+        // SAFETY: the early allocator reserved enough mapped memory for every slot.
+        let slot_ptr = unsafe { slots.add(index) };
+        let slot_addr = slot_ptr as usize;
+        let slot = MetaSlot {
+            storage: pcell_maybe_uninit::PCell::new(MetaSlotStorage::Empty([0; 39])).0,
+            ref_count: PAtomicU64::new(REF_COUNT_UNUSED).0,
+            vtable_ptr: PPtr::from_addr(
+                slot_addr + core::mem::offset_of!(MetaSlot, vtable_ptr),
+            ),
+            in_list: PAtomicU64::new(0).0,
+        };
+        // SAFETY: the early allocator exclusively owns this uninitialized slot.
+        unsafe { slot_ptr.write(slot) };
+    }
+
+    let meta_pages = meta_start..meta_start + nr_meta_pages * PAGE_SIZE;
+    let prop = PageProperty {
+        flags: PageFlags::RW(),
+        cache: CachePolicy::Writeback,
+        priv_flags: PrivilegedPageFlags::GLOBAL(),
+    };
+    boot_pt::with_borrow(|mut boot_pt| {
+        for index in 0..nr_meta_pages {
+            let pa = meta_start + index * PAGE_SIZE;
+            let va = FRAME_METADATA_RANGE.start + index * PAGE_SIZE;
+            // SAFETY: metadata mappings occupy the dedicated metadata range.
+            unsafe { boot_pt.map_base_page(va, pa / PAGE_SIZE, prop) };
+        }
+        ((), boot_pt)
+    })
+    .expect("failed to map frame metadata");
+
+    super::MAX_PADDR_RUNTIME.store(max_paddr, Ordering::Relaxed);
+    meta_pages
+}
+
+pub(in crate::mm) fn is_initialized() -> bool {
+    super::MAX_PADDR_RUNTIME.load(Ordering::Relaxed) != 0
+}
+
 /*
 /// Initializes the metadata of all physical frames.
 ///

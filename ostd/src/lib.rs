@@ -38,13 +38,20 @@ pub mod arch;
 //#[path = "arch/riscv/mod.rs"]
 //pub mod arch;
 pub mod boot;
+#[path = "console.rs"]
 pub mod console;
 pub mod cpu;
 pub mod error;
 pub mod mm;
+#[cfg(not(ktest))]
 pub mod panic;
+#[cfg(ktest)]
+#[path = "panic_ktest.rs"]
+pub mod panic;
+#[cfg(not(ktest))]
 pub mod power;
 pub mod prelude;
+#[cfg(not(ktest))]
 pub mod smp;
 pub mod sync;
 pub mod task;
@@ -56,24 +63,25 @@ pub mod util;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
-pub use ostd_macros::{main, panic_handler};
+pub use ostd_macros::{global_frame_allocator, main, panic_handler};
 pub use ostd_pod::Pod;
 pub use self::error::Error;
 
 /// Initializes OSTD for the minimal ktest branch.
 #[doc(hidden)]
 unsafe fn init() {
+    #[cfg(not(ktest))]
     arch::enable_cpu_features();
+    #[cfg(all(ktest, target_arch = "x86_64"))]
+    // SAFETY: The x86-64 ktest path requires NXE for non-executable page mappings.
+    unsafe { arch::enable_nxe_for_ktest() };
 
     // SAFETY: This function is called only once, before `allocator::init`
     // and after memory regions are initialized.
     unsafe { mm::frame::allocator::init_early_allocator() };
 
     #[cfg(target_arch = "x86_64")]
-    arch::if_tdx_enabled!({
-    } else {
-        arch::serial::init();
-    });
+    arch::serial::init();
     #[cfg(not(target_arch = "x86_64"))]
     arch::serial::init();
 
@@ -81,6 +89,7 @@ unsafe fn init() {
     // 1. They are only called once in the boot context of the BSP.
     // 2. The number of CPUs are available because ACPI has been initialized.
     // 3. No CPU-local objects have been accessed yet.
+    #[cfg(not(ktest))]
     unsafe { cpu::init_on_bsp() };
 
     // SAFETY: We are on the BSP and APs are not yet started.
@@ -91,19 +100,25 @@ unsafe fn init() {
 
     sync::init();
 
+    #[cfg(not(ktest))]
     boot::init_after_heap();
 
+    #[cfg(not(ktest))]
     mm::dma::init();
 
+    #[cfg(not(ktest))]
     unsafe { arch::late_init_on_bsp() };
 
+    #[cfg(not(ktest))]
     smp::init();
 
     // SAFETY: This function is called only once on the BSP.
+    #[cfg(not(ktest))]
     unsafe {
         mm::kspace::activate_kernel_page_table();
     }
 
+    #[cfg(not(ktest))]
     arch::irq::enable_local();
 
     IN_BOOTSTRAP_CONTEXT.store(false, Ordering::Relaxed);

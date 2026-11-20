@@ -48,7 +48,7 @@ pub(crate) use cursor::*;
 #[cfg(all(ktest, feature = "full-ktest"))]
 mod test;
 
-//pub(crate) mod boot_pt;
+pub(crate) mod boot_pt;
 
 verus! {
 

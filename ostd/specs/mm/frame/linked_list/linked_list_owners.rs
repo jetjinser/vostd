@@ -30,6 +30,7 @@ verus! {
 pub struct MetaSlotSmall;
 
 /// Representation of a link as stored in the metadata slot.
+#[repr(C)]
 pub struct StoredLink {
     pub next: Option<Paddr>,
     pub prev: Option<Paddr>,
@@ -93,7 +94,12 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> Repr<MetaSlotStorage> for Link<M> {
 
     #[verifier::external_body]
     fn to_repr(self, Tracked(perm): Tracked<&mut LinkInnerPerms<M>>) -> MetaSlotStorage {
-        unimplemented!()
+        let slot = self.meta.to_repr(Tracked(&mut perm.storage));
+        MetaSlotStorage::FrameLink(StoredLink {
+            next: self.next.map(|ptr| ptr.addr()),
+            prev: self.prev.map(|ptr| ptr.addr()),
+            slot,
+        })
     }
 
     open spec fn from_repr_spec(r: MetaSlotStorage, perm: LinkInnerPerms<M>) -> Self {
@@ -119,7 +125,18 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> Repr<MetaSlotStorage> for Link<M> {
 
     #[verifier::external_body]
     fn from_repr(r: MetaSlotStorage, Tracked(perm): Tracked<&LinkInnerPerms<M>>) -> Self {
-        unimplemented!()
+        match r {
+            MetaSlotStorage::FrameLink(link) => Link {
+                next: link.next.map(|addr| {
+                    ReprPtr::from_pptr(PPtr::<MetaSlotStorage>::from_addr(addr))
+                }),
+                prev: link.prev.map(|addr| {
+                    ReprPtr::from_pptr(PPtr::<MetaSlotStorage>::from_addr(addr))
+                }),
+                meta: M::from_repr(link.slot, Tracked(&perm.storage)),
+            },
+            _ => panic!("metadata slot does not contain a linked-list link"),
+        }
     }
 
     #[verifier::external_body]
@@ -127,7 +144,17 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> Repr<MetaSlotStorage> for Link<M> {
         r: &'a MetaSlotStorage,
         Tracked(perm): Tracked<&'a LinkInnerPerms<M>>,
     ) -> &'a Self {
-        unimplemented!()
+        let MetaSlotStorage::FrameLink(link) = r else {
+            panic!("metadata slot does not contain a linked-list link")
+        };
+        assert!(core::mem::size_of::<M>() == 0 && !core::mem::needs_drop::<M>());
+        assert!(core::mem::size_of::<Link<M>>() == core::mem::size_of::<StoredLink>());
+        assert!(core::mem::align_of::<Link<M>>() == core::mem::align_of::<StoredLink>());
+        assert!(core::mem::offset_of!(Link<M>, next) == core::mem::offset_of!(StoredLink, next));
+        assert!(core::mem::offset_of!(Link<M>, prev) == core::mem::offset_of!(StoredLink, prev));
+        // SAFETY: For the erased zero-sized metadata used by this runtime path,
+        // Link and StoredLink contain the same two pointer-sized optional fields.
+        unsafe { &*(link as *const StoredLink as *const Link<M>) }
     }
 
     #[verifier::external_body]
@@ -135,7 +162,17 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> Repr<MetaSlotStorage> for Link<M> {
         r: &'a mut MetaSlotStorage,
         Tracked(perm): Tracked<&'a mut LinkInnerPerms<M>>,
     ) -> &'a mut Self {
-        unimplemented!()
+        let MetaSlotStorage::FrameLink(link) = r else {
+            panic!("metadata slot does not contain a linked-list link")
+        };
+        assert!(core::mem::size_of::<M>() == 0 && !core::mem::needs_drop::<M>());
+        assert!(core::mem::size_of::<Link<M>>() == core::mem::size_of::<StoredLink>());
+        assert!(core::mem::align_of::<Link<M>>() == core::mem::align_of::<StoredLink>());
+        assert!(core::mem::offset_of!(Link<M>, next) == core::mem::offset_of!(StoredLink, next));
+        assert!(core::mem::offset_of!(Link<M>, prev) == core::mem::offset_of!(StoredLink, prev));
+        // SAFETY: For the erased zero-sized metadata used by this runtime path,
+        // Link and StoredLink contain the same two pointer-sized optional fields.
+        unsafe { &mut *(link as *mut StoredLink as *mut Link<M>) }
     }
 
     proof fn from_to_repr(self, perm: LinkInnerPerms<M>) {

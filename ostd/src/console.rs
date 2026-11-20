@@ -2,7 +2,6 @@
 //! Console output.
 use core::fmt::{self, Arguments, Write};
 
-use crate::sync::{LocalIrqDisabled, SpinLock};
 
 struct Stdout;
 
@@ -15,20 +14,10 @@ impl Write for Stdout {
     }
 }
 
-static STDOUT: SpinLock<Stdout, LocalIrqDisabled> = SpinLock::new(Stdout);
-
 /// Prints formatted arguments to the console.
 pub fn early_print(args: Arguments) {
-    #[cfg(target_arch = "x86_64")]
-    crate::arch::if_tdx_enabled!({
-        // Hold the lock to prevent the logs from interleaving.
-        let _guard = STDOUT.lock();
-        tdx_guest::print(args);
-    } else {
-        STDOUT.lock().write_fmt(args).unwrap();
-    });
-    #[cfg(not(target_arch = "x86_64"))]
-    STDOUT.lock().write_fmt(args).unwrap();
+    let mut stdout = Stdout;
+    stdout.write_fmt(args).unwrap();
 }
 
 /// Prints to the console.

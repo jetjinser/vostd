@@ -1,0 +1,14 @@
+project_type = "kernel"
+
+[boot]
+method = "qemu-direct"
+
+[grub]
+protocol = "multiboot2"
+display_grub_menu = false
+
+[build]
+rustflags = "--cfg ktest --extern ostd=/tmp/vstd-dual-mode-dv-target/x86_64-unknown-none/release/libostd.rlib -L dependency=/tmp/vstd-dual-mode-dv-target/x86_64-unknown-none/release/deps -L dependency=/tmp/vstd-dual-mode-dv-target/release/deps"
+
+[qemu]
+args = "-m 2G -smp 1 -nographic -no-reboot -device isa-debug-exit,iobase=0xf4,iosize=0x04"

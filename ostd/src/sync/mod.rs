@@ -19,7 +19,6 @@ pub use self::{
     spin::{SpinLock, SpinLockGuard},
     wait::{WaitQueue, Waiter, Waker},
 };
-/*
 pub(crate) fn init() {
     rcu::init();
-}*/
+}

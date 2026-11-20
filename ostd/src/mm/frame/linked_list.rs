@@ -635,7 +635,7 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> LinkedList<M> {
             id != 0,
             final(self).list_id == id,
     {
-        unimplemented!()/*        // FIXME: Self-incrementing IDs may overflow, while `core::pin::Pin`
+        // FIXME: Self-incrementing IDs may overflow, while `core::pin::Pin`
         // is not compatible with locks. Think about a better solution.
         static LIST_ID_ALLOCATOR: AtomicU64 = AtomicU64::new(1);
         const MAX_LIST_ID: u64 = i64::MAX as u64;
@@ -643,15 +643,13 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> LinkedList<M> {
         if self.list_id == 0 {
             let id = LIST_ID_ALLOCATOR.fetch_add(1, Ordering::Relaxed);
             if id >= MAX_LIST_ID {
-//                log::error!("The frame list ID allocator has exhausted.");
-//                abort();
-                unimplemented!()
+                panic!("The frame list ID allocator has exhausted.");
             }
             self.list_id = id;
             id
         } else {
             self.list_id
-        }*/
+        }
 
     }
 }
@@ -1671,6 +1669,7 @@ impl<M: AnyFrameMeta + Repr<MetaSlotSmall>> Drop for LinkedList<M> {
 // #[verifier::external]
 // unsafe impl<M> Sync for LinkedList<M> where Link<M>: AnyFrameMeta {}
 /// A link in the linked list.
+#[repr(C)]
 pub struct Link<M: AnyFrameMeta + Repr<MetaSlotSmall>> {
     pub next: Option<ReprPtr<MetaSlotStorage, Link<M>>>,
     pub prev: Option<ReprPtr<MetaSlotStorage, Link<M>>>,

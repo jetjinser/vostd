@@ -1,41 +1,35 @@
 // SPDX-License-Identifier: MPL-2.0
-//! The console I/O.
-use super::device::serial::SerialPort;
-use crate::io::reserve_io_port_range;
+//! Minimal COM1 support for the BSP ktest path.
 
-bitflags_upstream::bitflags! {
-  struct LineSts: u8 {
-    const INPUT_FULL = 1;
-    const OUTPUT_EMPTY = 1 << 5;
-  }
+unsafe fn outb(port: u16, value: u8) {
+    // SAFETY: The ktest kernel reserves and exclusively uses COM1.
+    unsafe { core::arch::asm!("out dx, al", in("dx") port, in("al") value, options(nomem, nostack, preserves_flags)) }
 }
 
-static CONSOLE_COM1_PORT: SerialPort = unsafe { SerialPort::new(0x3F8) };
-reserve_io_port_range!(0x3F8..0x400);
+unsafe fn inb(port: u16) -> u8 {
+    let value: u8;
+    // SAFETY: The ktest kernel reserves and exclusively uses COM1.
+    unsafe { core::arch::asm!("in al, dx", in("dx") port, out("al") value, options(nomem, nostack, preserves_flags)) };
+    value
+}
 
 /// Initializes the serial port.
 pub(crate) fn init() {
-    CONSOLE_COM1_PORT.init();
-}
-
-fn line_sts() -> LineSts {
-    LineSts::from_bits_truncate(CONSOLE_COM1_PORT.line_status())
+    unsafe {
+        outb(0x3f9, 0x00);
+        outb(0x3fb, 0x80);
+        outb(0x3f8, 0x03);
+        outb(0x3f9, 0x00);
+        outb(0x3fb, 0x03);
+        outb(0x3fa, 0xc7);
+        outb(0x3fc, 0x0b);
+    }
 }
 
 /// Sends a byte on the serial port.
 pub(crate) fn send(data: u8) {
-    match data {
-        8 | 0x7F => {
-            while !line_sts().contains(LineSts::OUTPUT_EMPTY) {}
-            CONSOLE_COM1_PORT.send(8);
-            while !line_sts().contains(LineSts::OUTPUT_EMPTY) {}
-            CONSOLE_COM1_PORT.send(b' ');
-            while !line_sts().contains(LineSts::OUTPUT_EMPTY) {}
-            CONSOLE_COM1_PORT.send(8);
-        }
-        _ => {
-            while !line_sts().contains(LineSts::OUTPUT_EMPTY) {}
-            CONSOLE_COM1_PORT.send(data);
-        }
+    unsafe {
+        while inb(0x3fd) & 0x20 == 0 {}
+        outb(0x3f8, data);
     }
 }

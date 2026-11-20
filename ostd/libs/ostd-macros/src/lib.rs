@@ -35,6 +35,16 @@ pub fn main(_attr: TokenStream, item: TokenStream) -> TokenStream {
             unreachable!("`yield_now` in the boot context should not return");
         }
 
+        #[cfg(ktest)]
+        #[no_mangle]
+        extern "Rust" fn __ostd_main() -> ! {
+            let _: () = #main_fn_name();
+            loop {
+                // SAFETY: The minimal single-CPU test kernel has no scheduler.
+                unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
+            }
+        }
+
         #[expect(unused)]
         #main_fn
     )
@@ -191,7 +201,6 @@ pub fn panic_handler(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let handler_fn_name = &handler_fn.sig.ident;
 
     quote!(
-        #[cfg(not(ktest))]
         #[no_mangle]
         extern "Rust" fn __ostd_panic_handler(info: &core::panic::PanicInfo) -> ! {
             #handler_fn_name(info);

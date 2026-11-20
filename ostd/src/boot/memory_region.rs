@@ -5,7 +5,7 @@ use vstd_extra::prelude::*;
 
 use crate::specs::arch::*;
 
-use crate::mm::{Paddr, Vaddr};
+use crate::mm::{Paddr, Vaddr, kspace::kernel_loaded_offset};
 use align_ext::AlignExt;
 use core::ops::Deref;
 
@@ -97,11 +97,11 @@ impl MemoryRegion {
         }
     }
 
-    /*
     /// Constructs a memory region where kernel sections are loaded.
     ///
     /// Most boot protocols do not mark the place where the kernel loads as unusable. In this case,
     /// we need to explicitly construct and append this memory region.
+    #[verifier::external_body]
     pub fn kernel() -> Self {
         // These are physical addresses provided by the linker script.
         extern "C" {
@@ -116,6 +116,7 @@ impl MemoryRegion {
     }
 
     /// Constructs a framebuffer memory region.
+    #[verifier::external_body]
     pub fn framebuffer(fb: &crate::boot::BootloaderFramebufferArg) -> Self {
         Self {
             base: fb.address,
@@ -129,6 +130,7 @@ impl MemoryRegion {
     /// # Panics
     ///
     /// This method will panic if the byte slice does not live in the linear mapping.
+    #[verifier::external_body]
     pub fn module(bytes: &[u8]) -> Self {
         let vaddr = bytes.as_ptr() as Vaddr;
         assert!(crate::mm::kspace::LINEAR_MAPPING_VADDR_RANGE.contains(&vaddr));
@@ -138,7 +140,7 @@ impl MemoryRegion {
             len: bytes.len(),
             typ: MemoryRegionType::Reclaimable,
         }
-    } */
+    }
 
     /// The physical address of the base of the region.
     #[verus_verify(dual_spec)]
@@ -337,7 +339,6 @@ impl<const LEN: usize> MemoryRegionArray<LEN> {
             Err("MemoryRegionArray is full")
         }
     }
-    /*
     /// Sorts the regions and returns a full set of non-overlapping regions.
     ///
     /// If an address is in multiple regions, the region with the lowest
@@ -353,6 +354,7 @@ impl<const LEN: usize> MemoryRegionArray<LEN> {
     /// # Panics
     ///
     /// This method will panic if the number of output regions is greater than `LEN`.
+    #[verifier::external_body]
     pub fn into_non_overlapping(mut self) -> Self {
         let max_addr = self
             .iter()
@@ -414,7 +416,7 @@ impl<const LEN: usize> MemoryRegionArray<LEN> {
         result.count = merged_count;
 
         result
-    }*/
+    }
 }
 
 #[cfg(all(ktest, feature = "full-ktest"))]

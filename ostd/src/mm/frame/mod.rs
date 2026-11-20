@@ -68,7 +68,7 @@ use core::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-//pub use allocator::GlobalFrameAllocator;
+pub use allocator::GlobalFrameAllocator;
 use super::PagingLevel;
 use crate::mm::kspace::FRAME_METADATA_RANGE;
 use crate::mm::page_table::RCClone;
@@ -90,19 +90,16 @@ pub use untyped::{AnyUFrameMeta, UFrame};
 
 verus! {
 
-/*
-static MAX_PADDR: AtomicUsize = AtomicUsize::new(0);
-*/
+pub(crate) exec static MAX_PADDR_RUNTIME: AtomicUsize = AtomicUsize::new(0);
 /// Returns the maximum physical address that is tracked by frame metadata.
 #[verifier::external_body]
 pub(in crate::mm) fn max_paddr() -> Paddr
     returns
         MAX_PADDR,
 {
-    // let max_paddr = MAX_PADDR.load(Ordering::Relaxed) as Paddr;
+    let max_paddr = MAX_PADDR_RUNTIME.load(Ordering::Relaxed) as Paddr;
     // debug_assert_ne!(max_paddr, 0);
-    // max_paddr
-    unimplemented!()
+    max_paddr
 }
 
 #[verifier::external_body]

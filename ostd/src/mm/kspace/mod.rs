@@ -92,7 +92,6 @@ pub const KERNEL_BASE_VADDR: Vaddr = 0x9000_0000_0000_0000 << ADDR_WIDTH_SHIFT;
 /// End of the kernel address space (non inclusive).
 pub const KERNEL_END_VADDR: Vaddr = 0xffff_ffff_ffff_0000 << ADDR_WIDTH_SHIFT;
 
-/*
 /// The kernel code is linear mapped to this address.
 ///
 /// FIXME: This offset should be randomly chosen by the loader or the
@@ -100,7 +99,7 @@ pub const KERNEL_END_VADDR: Vaddr = 0xffff_ffff_ffff_0000 << ADDR_WIDTH_SHIFT;
 /// doesn't support relocatable kernel yet.
 pub fn kernel_loaded_offset() -> usize {
     KERNEL_CODE_BASE_VADDR
-}*/
+}
 
 #[cfg(target_arch = "x86_64")]
 const KERNEL_CODE_BASE_VADDR: usize = 0xffff_ffff_8000_0000 << ADDR_WIDTH_SHIFT;
@@ -658,3 +657,10 @@ impl RCClone for MappedItem {
 //         crate::mm::page_table::boot_pt::dismiss();
 //     }
 // }
+
+/// The dual-mode ktest uses the loader's page table directly. Frame metadata
+/// is mapped by `frame::meta::init` before this call.
+pub(crate) fn init_kernel_page_table(_meta_pages: Range<Paddr>) {}
+
+/// The dual-mode ktest keeps the loader's page table active.
+pub(crate) unsafe fn activate_kernel_page_table() {}

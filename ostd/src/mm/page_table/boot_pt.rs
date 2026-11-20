@@ -4,30 +4,21 @@
 //! in order to initialize the running phase page tables.
 use vstd::prelude::*;
 
-use crate::specs::arch::{NR_LEVELS, PAGE_SIZE, paging_consts::PagingConsts};
-
 use super::{PageTableEntryTrait, pte_index};
-use crate::mm::frame::Frame;
-use crate::mm::{Paddr, PagingConstsTrait, PagingLevel, Vaddr};
+use crate::arch::mm::{PageTableEntry, PagingConsts, current_page_table_paddr};
 use crate::{
-    //    cpu::num_cpus,
-    //    cpu_local_cell,
     mm::{
         PAGE_SIZE, Paddr, PagingConstsTrait, PagingLevel, Vaddr,
-        frame::{
-            self,
-            //            allocator::{self, EarlyAllocatedFrameMeta},
-        },
+        frame::allocator,
         nr_subpage_per_huge, paddr_to_vaddr,
         page_prop::{PageFlags, PageProperty},
     },
-    //    sync::SpinLock,
 };
 use core::{
     alloc::Layout,
     result::Result,
-    sync::atomic::{AtomicU32, Ordering},
 };
+use spin::Mutex;
 
 verus! {
 
@@ -41,21 +32,20 @@ type FrameNumber = usize;
 ///
 /// The boot page table will be dropped when there's no CPU activating it.
 /// This function will return an [`Err`] if the boot page table is dropped.
+#[verifier::external_body]
 pub(crate) fn with_borrow<F, R>(f: F) -> Result<R, ()> where
     F: FnOnce(BootPageTable) -> (R, BootPageTable),
  {
-    let mut boot_pt = BOOT_PAGE_TABLE;
+    let mut boot_pt = BOOT_PAGE_TABLE.lock();
 
-    if IS_DISMISSED {
-        return Err(());
-    }
     // Lazy initialization.
 
     if boot_pt.is_none() {
         // SAFETY: This function is called only once.
-        boot_pt = Some(unsafe { BootPageTable::from_current_pt() });
+        *boot_pt = Some(unsafe { BootPageTable::from_current_pt() });
     }
-    let (r, boot_pt) = f(boot_pt.unwrap());
+    let (r, new_boot_pt) = f(boot_pt.take().unwrap());
+    *boot_pt = Some(new_boot_pt);
 
     Ok(r)
 }
@@ -97,18 +87,6 @@ pub(crate) unsafe fn dismiss() {
 */
 
 /// The boot page table singleton instance.
-static BOOT_PAGE_TABLE: Option<BootPageTable>;
-
-/// If it reaches the number of CPUs, the boot page table will be dropped.
-static DISMISS_COUNT: AtomicU32 = AtomicU32::new(0);
-
-static IS_DISMISSED: bool = false;
-
-/*cpu_local_cell! {
-    /// If the boot page table is dismissed on this CPU.
-    static IS_DISMISSED: bool = false;
-}*/
-
 /// A simple boot page table singleton for boot stage mapping management.
 ///
 /// If applicable, the boot page table could track the lifetime of page table
@@ -130,7 +108,7 @@ pub(crate) struct BootPageTable<
 // The first available bit is used to differentiate firmware page tables from
 // the page tables allocated here. The second is for identifying double-visits
 // when walking the page tables since the PT can be a DAG.
-const PTE_POINTS_TO_FIRMWARE_PT: PageFlags = PageFlags::AVAIL1();
+// The ktest boot page table is retained for the full test run and never dismissed.
 
 impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
     /// Creates a new boot page table from the current page table root
@@ -141,25 +119,14 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
     /// This function should be called only once in the initialization phase.
     /// Otherwise, It would lead to double-drop of the page table frames set up
     /// by the firmware, loader or the setup code.
+    #[verifier::external_body]
     unsafe fn from_current_pt() -> Self {
         let root_pt = current_page_table_paddr() / C::BASE_PAGE_SIZE();
-        // Make sure the 2 available bits are not set for firmware page tables.
-        dfs_walk_on_leave::<E, C>(
-            root_pt,
-            C::NR_LEVELS(),
-            &mut |pte: &mut E|
-                {
-                    let mut prop = pte.prop();
-                    let flags = PageFlags {
-                        bits: prop.flags.bits | PTE_POINTS_TO_FIRMWARE_PT.bits,
-                    };
-                    pte.set_prop(prop);
-                },
-        );
         Self { root_pt, _pretend_to_use: core::marker::PhantomData }
     }
 
     /// Returns the root physical address of the boot page table.
+    #[verifier::external_body]
     pub(crate) fn root_address(&self) -> Paddr {
         self.root_pt * C::BASE_PAGE_SIZE()
     }
@@ -174,6 +141,7 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
     ///
     /// This function is unsafe because it can cause undefined behavior if the caller
     /// maps a page in the kernel address space.
+    #[verifier::external_body]
     pub unsafe fn map_base_page(&mut self, from: Vaddr, to: FrameNumber, prop: PageProperty) {
         let mut pt = self.root_pt;
         let mut level = C::NR_LEVELS();
@@ -224,6 +192,7 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
     ///
     /// This function is unsafe because it can cause undefined behavior if the caller
     /// maps a page in the kernel address space.
+    #[verifier::external_body]
     pub unsafe fn protect_base_page(
         &mut self,
         virt_addr: Vaddr,
@@ -281,26 +250,16 @@ impl<E: PageTableEntryTrait, C: PagingConstsTrait> BootPageTable<E, C> {
     // TODO: come back after Allocator
     #[verifier::external_body]
     fn alloc_child(&mut self) -> E {
-        unimplemented!()/*
-        let frame_paddr = if frame::meta::is_initialized() {
-            let frame = FrameAllocOptions::new()
-                .zeroed(false)
-                .alloc_frame_with(EarlyAllocatedFrameMeta)
-                .unwrap();
-            frame.into_raw()
-        } else {
-            allocator::early_alloc(
-                Layout::from_size_align(C::BASE_PAGE_SIZE(), C::BASE_PAGE_SIZE()).unwrap(),
-            )
-            .unwrap()
-        };
+        let frame_paddr = allocator::early_alloc(
+            Layout::from_size_align(C::BASE_PAGE_SIZE(), C::BASE_PAGE_SIZE()).unwrap(),
+        )
+        .unwrap();
 
         // Zero it out.
         let vaddr = paddr_to_vaddr(frame_paddr) as *mut u8;
-        unsafe { core::ptr::write_bytes(vaddr, 0, PAGE_SIZE) };
+        unsafe { core::ptr::write_bytes(vaddr, 0, C::BASE_PAGE_SIZE()) };
 
         E::new_pt(frame_paddr)
-        */
 
     }
 
@@ -320,7 +279,6 @@ fn dfs_walk_on_leave<E: PageTableEntryTrait, C: PagingConstsTrait>(
     level: PagingLevel,
     op: &mut impl FnMut(&mut E),
 ) {
-    unimplemented!()/*
     if level >= 2 {
         let pt_vaddr = paddr_to_vaddr(pt * C::BASE_PAGE_SIZE()) as *mut E;
         let pt = unsafe { core::slice::from_raw_parts_mut(pt_vaddr, nr_subpage_per_huge::<C>()) };
@@ -331,8 +289,8 @@ fn dfs_walk_on_leave<E: PageTableEntryTrait, C: PagingConstsTrait>(
             }
         }
     }
-    */
-
 }
 
 } // verus!
+
+static BOOT_PAGE_TABLE: Mutex<Option<BootPageTable>> = Mutex::new(None);

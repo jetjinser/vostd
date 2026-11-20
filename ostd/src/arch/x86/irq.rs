@@ -84,13 +84,20 @@ pub(crate) fn enable_local_and_halt() {
 } */
 
 pub(crate) fn disable_local() {
-    // x86_64::instructions::interrupts::disable();
-    unimplemented!()
+    // SAFETY: The caller only uses this in the kernel's local IRQ guard.
+    unsafe { core::arch::asm!("cli", options(nomem, nostack, preserves_flags)) };
 }
 
 pub(crate) fn is_local_enabled() -> bool {
-    // (rflags::read_raw() & RFlags::INTERRUPT_FLAG.bits()) != 0
-    unimplemented!()
+    let flags: usize;
+    // SAFETY: Reading RFLAGS has no side effects.
+    unsafe { core::arch::asm!("pushfq", "pop {}", out(reg) flags, options(nomem)) };
+    flags & (1 << 9) != 0
+}
+
+pub(crate) fn enable_local() {
+    // SAFETY: The BSP test runner enables interrupts only after initialization.
+    unsafe { core::arch::asm!("sti", "nop", options(nomem, nostack, preserves_flags)) };
 }
 
 // ####### Inter-Processor Interrupts (IPIs) #######
